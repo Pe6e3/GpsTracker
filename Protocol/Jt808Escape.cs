@@ -35,4 +35,32 @@ public static class Jt808Escape
 
         return result.ToArray();
     }
+
+    public static byte[] Escape(ReadOnlySpan<byte> data)
+    {
+        if (data.IsEmpty)
+            return Array.Empty<byte>();
+
+        var result = new List<byte>(data.Length);
+        foreach (var b in data)
+        {
+            if (b == 0x7E)
+            {
+                result.Add(0x7D);
+                result.Add(0x02);
+                continue;
+            }
+
+            if (b == 0x7D)
+            {
+                result.Add(0x7D);
+                result.Add(0x01);
+                continue;
+            }
+
+            result.Add(b);
+        }
+
+        return result.ToArray();
+    }
 }

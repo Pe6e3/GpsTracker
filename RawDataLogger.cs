@@ -37,6 +37,8 @@ public static class RawDataLogger
 
         return direction switch
         {
+            PacketLogDirection.FromDevice => $"[{device} → {ServerIcon}]",
+            PacketLogDirection.ToDevice => $"[{ServerIcon} → {device}]",
             "OUT" => $"[{device} → {ServerIcon}]",
             "IN" => $"[{ServerIcon} → {device}]",
             _ => $"[{direction}]"

@@ -71,13 +71,12 @@ public sealed class TcpProxyHostedService : IHostedService
         }
         catch (SocketException ex)
         {
-            TrafficLogger.LogInfo($"Не удалось запустить TCP-прокси на порту {_settings.ListenPort}: {ex.Message}");
+            TrafficLogger.LogInfo($"Не удалось запустить JT/T808 сервер на порту {_settings.ListenPort}: {ex.Message}");
             return;
         }
 
-        TrafficLogger.LogInfo("GPS TCP Proxy запущен");
+        TrafficLogger.LogInfo("JT/T808 GPS-сервер запущен");
         TrafficLogger.LogInfo($"Слушаю порт: {_settings.ListenPort}");
-        TrafficLogger.LogInfo($"Перенаправление на: {_settings.RemoteHost}:{_settings.RemotePort}");
         TrafficLogger.LogInfo("Raw-лог: logs/raw_data/");
         TrafficLogger.LogInfo($"Часовой пояс логов: {AppTime.FormatUtcOffset(_settings.UtcOffset)}");
         TrafficLogger.LogInfo($"Часовой пояс сервера: {AppTime.FormatUtcOffset(_settings.ServerUtcOffset)}");
@@ -97,7 +96,7 @@ public sealed class TcpProxyHostedService : IHostedService
                 {
                     try
                     {
-                        var session = new ProxySession(_settings, _connections, connection, client, _telemetryStore);
+                        var session = new DeviceSession(_connections, connection, client, _telemetryStore);
                         await session.RunAsync(stoppingToken);
                     }
                     catch (Exception ex)
@@ -109,7 +108,7 @@ public sealed class TcpProxyHostedService : IHostedService
         }
         catch (OperationCanceledException) when (stoppingToken.IsCancellationRequested)
         {
-            TrafficLogger.LogInfo("Прокси остановлен");
+            TrafficLogger.LogInfo("JT/T808 сервер остановлен");
         }
         finally
         {

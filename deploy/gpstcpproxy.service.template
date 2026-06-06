@@ -1,5 +1,5 @@
 [Unit]
-Description=GPS TCP Proxy (JT/T808) + HTTP API
+Description=GPS JT/T808 Server + HTTP API
 After=network-online.target
 Wants=network-online.target
 

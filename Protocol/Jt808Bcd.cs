@@ -2,6 +2,25 @@ namespace GpsTcpProxy.Protocol;
 
 public static class Jt808Bcd
 {
+    public static byte[] EncodeTerminalId(string terminalId)
+    {
+        var digits = new string(terminalId.Where(char.IsDigit).ToArray());
+        if (digits.Length > 12)
+            digits = digits[^12..];
+
+        digits = digits.PadLeft(12, '0');
+
+        var result = new byte[6];
+        for (var i = 0; i < 6; i++)
+        {
+            var high = digits[i * 2] - '0';
+            var low = digits[i * 2 + 1] - '0';
+            result[i] = (byte)((high << 4) | low);
+        }
+
+        return result;
+    }
+
     public static string DecodeDigits(ReadOnlySpan<byte> data)
     {
         if (data.IsEmpty)

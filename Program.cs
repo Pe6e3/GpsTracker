@@ -55,7 +55,7 @@ app.UseAuthorization();
 app.MapControllers();
 
 TrafficLogger.LogInfo($"HTTP API: http://0.0.0.0:{settings.ApiPort}");
-TrafficLogger.LogInfo($"TCP GPS: порт {settings.ListenPort} (запуск после API)");
+TrafficLogger.LogInfo($"JT/T808 GPS: порт {settings.ListenPort} (запуск после API)");
 
 try
 {
