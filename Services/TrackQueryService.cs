@@ -78,7 +78,7 @@ public sealed class TrackQueryService
             Lat = point.Latitude,
             Lon = point.Longitude,
             Alt = point.Altitude,
-            SpeedKmh = point.SpeedKmh,
+            Speed = point.SpeedKmh,
             Direction = point.Direction,
             TimeUtc = point.GpsTimeUtc.ToUniversalTime().ToString("O", CultureInfo.InvariantCulture),
             TimeLocal = AppTime.UtcToLocal(point.GpsTimeUtc).ToString("dd.MM.yyyy HH:mm:ss", CultureInfo.InvariantCulture)
