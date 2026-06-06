@@ -1,4 +1,5 @@
 using System.Text;
+using GpsTcpProxy.Models;
 using GpsTcpProxy.Protocol;
 
 namespace GpsTcpProxy;
@@ -24,11 +25,31 @@ public static class TrafficLogger
         WriteLine($"[{Timestamp()}] [{deviceName}] {line}");
     }
 
-    public static void LogUnparsedDeviceData(ProxyConnection connection, int bytes)
+    public static void LogGt06DevicePacket(ProxyConnection connection, Gt06Message message)
+    {
+        connection.Touch();
+
+        var line = Gt06EventFormatter.FormatLogLine(message);
+        if (line == null)
+            return;
+
+        var deviceName = DeviceRegistry.GetDisplayName(
+            string.IsNullOrWhiteSpace(message.Imei) ? connection.DeviceLabel : message.Imei);
+
+        WriteLine($"[{Timestamp()}] [{deviceName}] {line}");
+    }
+
+    public static void LogUnparsedDeviceData(ProxyConnection connection, int bytes, DeviceProtocol? protocol = null)
     {
         connection.Touch();
         var deviceName = DeviceRegistry.GetDisplayName(connection.DeviceLabel);
-        WriteLine($"[{Timestamp()}] [{deviceName}] Тип пакета: не-JT808 bytes={bytes}");
+        var protocolLabel = protocol switch
+        {
+            DeviceProtocol.Gt06 => "GT06",
+            DeviceProtocol.Jt808 => "JT/T808",
+            _ => "неизвестный"
+        };
+        WriteLine($"[{Timestamp()}] [{deviceName}] Тип пакета: не-{protocolLabel} bytes={bytes}");
     }
 
     private static void WriteLine(string message) =>

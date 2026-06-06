@@ -1,4 +1,5 @@
 using System.Net.Sockets;
+using GpsTcpProxy.Models;
 using GpsTcpProxy.Protocol;
 
 namespace GpsTcpProxy;
@@ -63,6 +64,22 @@ public sealed class DeviceSession
         }
     }
 
+    public async Task ProcessInitialChunkAsync(
+        NetworkStream stream,
+        ReadOnlyMemory<byte> chunk,
+        CancellationToken cancellationToken)
+    {
+        await ProcessChunkAsync(stream, chunk, cancellationToken);
+    }
+
+    public async Task ProcessFrameAsync(
+        NetworkStream stream,
+        byte[] frame,
+        CancellationToken cancellationToken)
+    {
+        await HandleFrameAsync(stream, frame, cancellationToken);
+    }
+
     private async Task ProcessChunkAsync(
         NetworkStream stream,
         ReadOnlyMemory<byte> chunk,
@@ -71,41 +88,47 @@ public sealed class DeviceSession
         _frameBuffer.Append(chunk.Span);
 
         foreach (var frame in _frameBuffer.ExtractFrames())
+            await HandleFrameAsync(stream, frame, cancellationToken);
+    }
+
+    private async Task HandleFrameAsync(
+        NetworkStream stream,
+        byte[] frame,
+        CancellationToken cancellationToken)
+    {
+        RawDataLogger.LogPacket(_connection, PacketLogDirection.FromDevice, frame);
+
+        if (!Jt808Parser.TryParseFrame(frame, out var message) || message == null)
         {
-            RawDataLogger.LogPacket(_connection, PacketLogDirection.FromDevice, frame);
-
-            if (!Jt808Parser.TryParseFrame(frame, out var message) || message == null)
-            {
-                TrafficLogger.LogUnparsedDeviceData(_connection, frame.Length);
-                continue;
-            }
-
-            if (!string.IsNullOrWhiteSpace(message.TerminalId))
-                _connection.DeviceId = message.TerminalId;
-
-            if (!Jt808PacketTypes.IsFromTerminal(message.MessageId))
-                continue;
-
-            if (!message.ChecksumValid)
-                TrafficLogger.LogInfo($"[{DeviceRegistry.GetDisplayName(_connection.DeviceLabel)}] checksum=INVALID msg=0x{message.MessageId:X4}");
-
-            if (message.MessageId == Jt808Parser.MsgLocationReport)
-            {
-                try
-                {
-                    _telemetryStore.SaveLocation(message);
-                }
-                catch (Exception ex)
-                {
-                    TrafficLogger.LogInfo($"Ошибка записи телеметрии: {ex.Message}");
-                }
-            }
-
-            TrafficLogger.LogDevicePacket(_connection, message);
-
-            foreach (var response in BuildResponses(message))
-                await SendFrameAsync(stream, response, cancellationToken);
+            TrafficLogger.LogUnparsedDeviceData(_connection, frame.Length, DeviceProtocol.Jt808);
+            return;
         }
+
+        if (!string.IsNullOrWhiteSpace(message.TerminalId))
+            _connection.DeviceId = message.TerminalId;
+
+        if (!Jt808PacketTypes.IsFromTerminal(message.MessageId))
+            return;
+
+        if (!message.ChecksumValid)
+            TrafficLogger.LogInfo($"[{DeviceRegistry.GetDisplayName(_connection.DeviceLabel)}] checksum=INVALID msg=0x{message.MessageId:X4}");
+
+        if (message.MessageId == Jt808Parser.MsgLocationReport)
+        {
+            try
+            {
+                _telemetryStore.SaveLocation(message);
+            }
+            catch (Exception ex)
+            {
+                TrafficLogger.LogInfo($"Ошибка записи телеметрии: {ex.Message}");
+            }
+        }
+
+        TrafficLogger.LogDevicePacket(_connection, message);
+
+        foreach (var response in BuildResponses(message))
+            await SendFrameAsync(stream, response, cancellationToken);
     }
 
     private IEnumerable<byte[]> BuildResponses(Jt808Message message)

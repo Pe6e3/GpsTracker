@@ -34,8 +34,14 @@ public sealed class Jt808FrameBuffer
                 break;
 
             var frame = _buffer.GetRange(0, end + 1).ToArray();
-            frames.Add(frame);
-            _buffer.RemoveRange(0, end + 1);
+            if (Jt808Parser.TryParseFrame(frame, out _))
+            {
+                frames.Add(frame);
+                _buffer.RemoveRange(0, end + 1);
+                continue;
+            }
+
+            _buffer.RemoveAt(0);
         }
 
         return frames;

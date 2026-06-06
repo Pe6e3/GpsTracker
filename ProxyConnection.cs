@@ -1,3 +1,5 @@
+using GpsTcpProxy.Models;
+
 namespace GpsTcpProxy;
 
 public sealed class ProxyConnection
@@ -34,4 +36,6 @@ public sealed class ProxyConnection
     public void Touch() => LastActivityAt = DateTime.Now;
 
     public string DeviceLabel => _deviceId ?? "-";
+
+    public DeviceProtocol? Protocol { get; set; }
 }

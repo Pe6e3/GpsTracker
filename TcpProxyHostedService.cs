@@ -80,7 +80,7 @@ public sealed class TcpProxyHostedService : IHostedService
         if (_settings.ProxyMode)
             TrafficLogger.LogInfo($"Режим: PROXY → {_settings.RemoteHost}:{_settings.RemotePort}");
         else
-            TrafficLogger.LogInfo("Режим: локальный JT/T808 сервер");
+            TrafficLogger.LogInfo("Режим: локальный сервер (JT/T808 + GT06)");
         TrafficLogger.LogInfo($"Слушаю порт: {_settings.ListenPort}");
         TrafficLogger.LogInfo("Raw-лог: logs/raw_data/");
         TrafficLogger.LogInfo($"Часовой пояс логов: {AppTime.FormatUtcOffset(_settings.UtcOffset)}");
@@ -103,12 +103,12 @@ public sealed class TcpProxyHostedService : IHostedService
                     {
                         if (_settings.ProxyMode)
                         {
-                            var session = new ProxySession(_settings, _connections, connection, client, _telemetryStore);
+                            var session = new MultiProtocolProxySession(_settings, _connections, connection, client, _telemetryStore);
                             await session.RunAsync(stoppingToken);
                         }
                         else
                         {
-                            var session = new DeviceSession(_connections, connection, client, _telemetryStore);
+                            var session = new MultiProtocolDeviceSession(_connections, connection, client, _telemetryStore);
                             await session.RunAsync(stoppingToken);
                         }
                     }

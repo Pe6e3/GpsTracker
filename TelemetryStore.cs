@@ -128,6 +128,75 @@ public sealed class TelemetryStore : IDisposable
         }
     }
 
+    public void SaveGt06Location(string? deviceLabel, Gt06Message message)
+    {
+        if (message.ProtocolNumber != Gt06Parser.ProtocolLocation)
+            return;
+
+        var location = Gt06Parser.ParseLocationReport(message.Payload);
+        if (location == null)
+            return;
+
+        var deviceId = DeviceRegistry.NormalizeId(deviceLabel ?? string.Empty);
+        if (string.IsNullOrEmpty(deviceId) || deviceId == "?")
+            return;
+
+        var deviceName = DeviceRegistry.GetDisplayName(deviceId);
+        if (deviceName == deviceId || deviceName == "?")
+            deviceName = null;
+
+        var receivedAtUtc = DateTime.UtcNow;
+        var gpsTimeUtc = AppTime.AsUtc(location.DeviceTimeUtc);
+
+        lock (_lock)
+        {
+            using var connection = OpenConnection();
+            using var command = connection.CreateCommand();
+            command.CommandText = """
+                INSERT INTO telemetry_points (
+                    device_id,
+                    device_name,
+                    latitude,
+                    longitude,
+                    altitude,
+                    speed_kmh,
+                    direction,
+                    gps_time_utc,
+                    received_at_utc,
+                    message_serial,
+                    alarm_flags,
+                    status_flags
+                ) VALUES (
+                    $device_id,
+                    $device_name,
+                    $latitude,
+                    $longitude,
+                    $altitude,
+                    $speed_kmh,
+                    $direction,
+                    $gps_time_utc,
+                    $received_at_utc,
+                    $message_serial,
+                    $alarm_flags,
+                    $status_flags
+                );
+                """;
+            command.Parameters.AddWithValue("$device_id", deviceId);
+            command.Parameters.AddWithValue("$device_name", (object?)deviceName ?? DBNull.Value);
+            command.Parameters.AddWithValue("$latitude", location.Latitude);
+            command.Parameters.AddWithValue("$longitude", location.Longitude);
+            command.Parameters.AddWithValue("$altitude", 0);
+            command.Parameters.AddWithValue("$speed_kmh", location.SpeedKmh);
+            command.Parameters.AddWithValue("$direction", location.Direction);
+            command.Parameters.AddWithValue("$gps_time_utc", FormatUtc(gpsTimeUtc));
+            command.Parameters.AddWithValue("$received_at_utc", FormatUtc(receivedAtUtc));
+            command.Parameters.AddWithValue("$message_serial", message.Serial);
+            command.Parameters.AddWithValue("$alarm_flags", 0);
+            command.Parameters.AddWithValue("$status_flags", 0);
+            command.ExecuteNonQuery();
+        }
+    }
+
     public IReadOnlyList<TelemetryPoint> GetTrack(
         string deviceId,
         DateTime? fromUtc = null,
