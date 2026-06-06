@@ -12,7 +12,7 @@ public sealed class DeviceSession
     private readonly TcpClient _client;
     private readonly TelemetryStore _telemetryStore;
     private readonly Jt808FrameBuffer _frameBuffer = new();
-    private ushort _serverSerial;
+    private bool _registrationCompleted;
 
     public DeviceSession(
         ConnectionManager connections,
@@ -39,8 +39,7 @@ public sealed class DeviceSession
                 if (bytesRead == 0)
                     break;
 
-                var chunk = buffer.AsMemory(0, bytesRead);
-                await ProcessChunkAsync(stream, chunk, cancellationToken);
+                await ProcessChunkAsync(stream, buffer.AsMemory(0, bytesRead), cancellationToken);
             }
         }
         catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested)
@@ -87,6 +86,9 @@ public sealed class DeviceSession
             if (!Jt808PacketTypes.IsFromTerminal(message.MessageId))
                 continue;
 
+            if (!message.ChecksumValid)
+                TrafficLogger.LogInfo($"[{DeviceRegistry.GetDisplayName(_connection.DeviceLabel)}] checksum=INVALID msg=0x{message.MessageId:X4}");
+
             if (message.MessageId == Jt808Parser.MsgLocationReport)
             {
                 try
@@ -101,53 +103,134 @@ public sealed class DeviceSession
 
             TrafficLogger.LogDevicePacket(_connection, message);
 
-            var response = BuildResponse(message);
-            if (response == null)
-                continue;
-
-            await stream.WriteAsync(response, cancellationToken);
-            await stream.FlushAsync(cancellationToken);
-            RawDataLogger.LogPacket(_connection, PacketLogDirection.ToDevice, response);
+            foreach (var response in BuildResponses(message))
+                await SendFrameAsync(stream, response, cancellationToken);
         }
     }
 
-    private byte[]? BuildResponse(Jt808Message message)
+    private IEnumerable<byte[]> BuildResponses(Jt808Message message)
     {
-        if (!message.ChecksumValid)
-            return null;
-
         var terminalId = message.TerminalId;
         if (string.IsNullOrWhiteSpace(terminalId))
-            return null;
+            yield break;
 
-        return message.MessageId switch
+        Jt808Parser.TryGetTerminalIdBytes(message.RawFrame, out var terminalIdBytes);
+
+        switch (message.MessageId)
         {
-            Jt808Parser.MsgRegistration => Jt808Encoder.BuildRegistrationResponse(
-                terminalId,
-                NextSerial(),
-                message.Serial,
-                result: 0,
-                authCode: terminalId),
+            case Jt808Parser.MsgRegistration:
+                _registrationCompleted = true;
+                TrafficLogger.LogInfo($"[{DeviceRegistry.GetDisplayName(terminalId)}] регистрация 0x0100 → 0x8100");
+                yield return BuildRegistrationResponse(message, message.Serial, BuildDefaultAuthCode(terminalId));
+                yield break;
 
-            Jt808Parser.MsgAuthentication or
-            Jt808Parser.MsgHeartbeat or
-            Jt808Parser.MsgLocationReport => Jt808Encoder.BuildGeneralResponse(
-                terminalId,
-                NextSerial(),
-                message.Serial,
-                message.MessageId,
-                result: 0),
+            case Jt808Parser.MsgAuthentication:
+                if (!IsAuthAccepted(message))
+                {
+                    TrafficLogger.LogInfo($"[{DeviceRegistry.GetDisplayName(terminalId)}] аутентификация отклонена");
+                    yield return BuildGeneralResponse(message, result: 1);
+                    yield break;
+                }
 
-            _ => Jt808Encoder.BuildGeneralResponse(
-                terminalId,
-                NextSerial(),
-                message.Serial,
-                message.MessageId,
-                result: 0)
-        };
+                if (!_registrationCompleted)
+                {
+                    _registrationCompleted = true;
+                    var authCode = message.Body.Length > 0 ? message.Body : BuildDefaultAuthCode(terminalId);
+                    TrafficLogger.LogInfo($"[{DeviceRegistry.GetDisplayName(terminalId)}] 0x0100 не было → 0x8100 перед 0x8001");
+                    yield return BuildRegistrationResponse(message, message.Serial, authCode);
+                }
+
+                TrafficLogger.LogInfo($"[{DeviceRegistry.GetDisplayName(terminalId)}] аутентификация принята → 0x8001");
+                yield return BuildGeneralResponse(message, result: 0);
+                yield break;
+
+            case Jt808Parser.MsgTimeSyncRequest:
+                yield return Jt808Encoder.BuildTimeSyncResponse(
+                    terminalId,
+                    NextSerial(),
+                    DateTime.UtcNow.AddHours(AppTime.DeviceUtcOffset));
+                yield break;
+
+            case Jt808Parser.MsgHeartbeat:
+            case Jt808Parser.MsgLocationReport:
+                yield return BuildGeneralResponse(message, result: 0);
+                yield break;
+
+            default:
+                yield return BuildGeneralResponse(message, result: 0);
+                yield break;
+        }
     }
 
-    private ushort NextSerial() => ++_serverSerial;
+    private static byte[] BuildRegistrationResponse(Jt808Message message, ushort originalSerial, byte[] authCode)
+    {
+        Jt808Parser.TryGetTerminalIdBytes(message.RawFrame, out var terminalIdBytes);
+        return Jt808Encoder.BuildRegistrationResponse(
+            message.TerminalId,
+            terminalIdBytes,
+            PlatformSerial.Next(),
+            originalSerial,
+            result: 0,
+            authCode);
+    }
+
+    private static byte[] BuildDefaultAuthCode(string terminalId)
+    {
+        var authCode = new byte[7];
+        Jt808Bcd.EncodeTerminalId(terminalId).CopyTo(authCode, 0);
+        authCode[6] = 0x01;
+        return authCode;
+    }
+
+    private static byte[] BuildGeneralResponse(Jt808Message message, byte result)
+    {
+        Jt808Parser.TryGetTerminalIdBytes(message.RawFrame, out var terminalIdBytes);
+        return Jt808Encoder.BuildGeneralResponse(
+            message.TerminalId,
+            terminalIdBytes,
+            PlatformSerial.Next(),
+            message.Serial,
+            message.MessageId,
+            result);
+    }
+
+    private static ushort NextSerial() => PlatformSerial.Next();
+
+    private async Task SendFrameAsync(NetworkStream stream, byte[] frame, CancellationToken cancellationToken)
+    {
+        await stream.WriteAsync(frame, cancellationToken);
+        await stream.FlushAsync(cancellationToken);
+        RawDataLogger.LogPacket(_connection, PacketLogDirection.ToDevice, frame);
+    }
+
+    private static bool IsAuthAccepted(Jt808Message message)
+    {
+        if (string.IsNullOrWhiteSpace(message.TerminalId) || message.Body.Length == 0)
+            return false;
+
+        var headerNorm = DeviceRegistry.NormalizeId(message.TerminalId);
+
+        if (message.Body.Length >= 6)
+        {
+            var bodyNorm = DeviceRegistry.NormalizeId(Jt808Bcd.DecodeDigits(message.Body.AsSpan(0, 6)));
+            if (bodyNorm == headerNorm)
+                return true;
+
+            var expected = Jt808Bcd.EncodeTerminalId(message.TerminalId);
+            if (message.Body.AsSpan(0, 6).SequenceEqual(expected))
+                return true;
+        }
+
+        var token = Jt808Bcd.DecodeDigits(message.Body);
+        if (token.StartsWith(message.TerminalId, StringComparison.Ordinal))
+            return true;
+
+        if (token.StartsWith(headerNorm, StringComparison.Ordinal) ||
+            token.StartsWith($"1{headerNorm}", StringComparison.Ordinal))
+            return true;
+
+        return DeviceRegistry.NormalizeId(token) == headerNorm;
+    }
 
     private static void CloseQuietly(TcpClient client)
     {

@@ -5,9 +5,12 @@ public static class Jt808Parser
     public const ushort MsgRegistration = 0x0100;
     public const ushort MsgRegistrationResponse = 0x8100;
     public const ushort MsgAuthentication = 0x0102;
+    public const ushort MsgTimeSyncRequest = 0x0104;
     public const ushort MsgHeartbeat = 0x0002;
     public const ushort MsgLocationReport = 0x0200;
     public const ushort MsgGeneralResponse = 0x8001;
+    public const ushort MsgTimeSyncResponse = 0x8104;
+    public const ushort MsgLocationQuery = 0x8201;
 
     public static bool TryParseFrame(byte[] rawFrame, out Jt808Message? message)
     {
@@ -45,6 +48,20 @@ public static class Jt808Parser
             RawFrame = rawFrame
         };
 
+        return true;
+    }
+
+    public static bool TryGetTerminalIdBytes(byte[] rawFrame, out byte[] terminalIdBytes)
+    {
+        terminalIdBytes = Array.Empty<byte>();
+        if (rawFrame.Length < 15 || rawFrame[0] != 0x7E || rawFrame[^1] != 0x7E)
+            return false;
+
+        var payload = Jt808Escape.Unescape(rawFrame.AsSpan(1, rawFrame.Length - 2));
+        if (payload.Length < 12)
+            return false;
+
+        terminalIdBytes = payload.AsSpan(4, 6).ToArray();
         return true;
     }
 

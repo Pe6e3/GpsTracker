@@ -6,7 +6,6 @@ namespace GpsTcpProxy;
 public static class TrafficLogger
 {
     private static readonly object Lock = new();
-    private static readonly string LogsDirectory = Path.Combine(AppContext.BaseDirectory, "logs");
 
     public static void LogInfo(string message) =>
         WriteLine($"[{Timestamp()}] {message}");
@@ -40,9 +39,7 @@ public static class TrafficLogger
         lock (Lock)
         {
             Console.Write(message);
-            Directory.CreateDirectory(LogsDirectory);
-            var logPath = Path.Combine(LogsDirectory, $"{AppTime.NowLocal():yyyy-MM-dd}.log");
-            File.AppendAllText(logPath, message, Encoding.UTF8);
+            LogFiles.Traffic.Append(message);
         }
     }
 

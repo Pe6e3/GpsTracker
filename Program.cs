@@ -10,6 +10,8 @@ var settings = ProxySettings.Load(settingsPath);
 
 AppTime.Configure(settings);
 DeviceRegistry.Load(Path.Combine(baseDir, "devices.json"));
+PlatformSerial.Initialize(settings.DatabasePath);
+LogFiles.Configure(settings.LogRetentionDays);
 
 var builder = WebApplication.CreateBuilder(args);
 
@@ -29,7 +31,9 @@ builder.Services.AddSingleton<TelemetryStore>(_ =>
 builder.Services.AddSingleton<ConnectionManager>();
 builder.Services.AddSingleton<AuthService>();
 builder.Services.AddSingleton<TrackQueryService>();
+builder.Services.AddSingleton<ServiceStatusService>();
 builder.Services.AddHostedService<TcpProxyHostedService>();
+builder.Services.AddHostedService<LogRotationHostedService>();
 
 builder.Services.AddControllers();
 builder.Services.AddAuthentication(JwtBearerDefaults.AuthenticationScheme)
@@ -54,8 +58,9 @@ app.UseAuthentication();
 app.UseAuthorization();
 app.MapControllers();
 
+TrafficLogger.LogInfo($"GpsTcpProxy v{AppVersion.Version}");
 TrafficLogger.LogInfo($"HTTP API: http://0.0.0.0:{settings.ApiPort}");
-TrafficLogger.LogInfo($"JT/T808 GPS: порт {settings.ListenPort} (запуск после API)");
+TrafficLogger.LogInfo($"JT/T808 GPS: порт {settings.ListenPort} (режим: {(settings.ProxyMode ? "proxy" : "server")})");
 
 try
 {

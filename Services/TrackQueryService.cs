@@ -80,7 +80,7 @@ public sealed class TrackQueryService
             Alt = point.Altitude,
             Speed = point.SpeedKmh,
             Direction = point.Direction,
-            TimeUtc = point.GpsTimeUtc.ToUniversalTime().ToString("O", CultureInfo.InvariantCulture),
+            TimeUtc = AppTime.AsUtc(point.GpsTimeUtc).ToString("O", CultureInfo.InvariantCulture),
             TimeLocal = AppTime.UtcToLocal(point.GpsTimeUtc).ToString("dd.MM.yyyy HH:mm:ss", CultureInfo.InvariantCulture)
         };
 }

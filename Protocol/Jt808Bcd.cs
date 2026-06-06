@@ -38,14 +38,6 @@ public static class Jt808Bcd
         return result.Length == 0 ? "0" : result;
     }
 
-    public static string DecodeDateTime(ReadOnlySpan<byte> data)
-    {
-        if (data.Length < 6)
-            return BitConverter.ToString(data.ToArray());
-
-        return $"20{data[0]:X2}-{data[1]:X2}-{data[2]:X2} {data[3]:X2}:{data[4]:X2}:{data[5]:X2}";
-    }
-
     public static bool TryParseDateTime(ReadOnlySpan<byte> data, out DateTime value)
     {
         value = default;
@@ -70,4 +62,29 @@ public static class Jt808Bcd
     }
 
     private static int BcdNibble(byte value) => ((value >> 4) & 0x0F) * 10 + (value & 0x0F);
+
+    public static string DecodeDateTime(ReadOnlySpan<byte> data)
+    {
+        if (data.Length < 6)
+            return BitConverter.ToString(data.ToArray());
+
+        return $"20{data[0]:X2}-{data[1]:X2}-{data[2]:X2} {data[3]:X2}:{data[4]:X2}:{data[5]:X2}";
+    }
+
+    public static byte[] EncodeDateTime(DateTime time)
+    {
+        var year = time.Year % 100;
+        return new[]
+        {
+            ToBcdByte(year),
+            ToBcdByte(time.Month),
+            ToBcdByte(time.Day),
+            ToBcdByte(time.Hour),
+            ToBcdByte(time.Minute),
+            ToBcdByte(time.Second)
+        };
+    }
+
+    private static byte ToBcdByte(int value) =>
+        (byte)(((value / 10) << 4) | (value % 10));
 }

@@ -76,6 +76,11 @@ public sealed class TcpProxyHostedService : IHostedService
         }
 
         TrafficLogger.LogInfo("JT/T808 GPS-сервер запущен");
+        TrafficLogger.LogInfo($"Версия: {AppVersion.Version}");
+        if (_settings.ProxyMode)
+            TrafficLogger.LogInfo($"Режим: PROXY → {_settings.RemoteHost}:{_settings.RemotePort}");
+        else
+            TrafficLogger.LogInfo("Режим: локальный JT/T808 сервер");
         TrafficLogger.LogInfo($"Слушаю порт: {_settings.ListenPort}");
         TrafficLogger.LogInfo("Raw-лог: logs/raw_data/");
         TrafficLogger.LogInfo($"Часовой пояс логов: {AppTime.FormatUtcOffset(_settings.UtcOffset)}");
@@ -96,8 +101,16 @@ public sealed class TcpProxyHostedService : IHostedService
                 {
                     try
                     {
-                        var session = new DeviceSession(_connections, connection, client, _telemetryStore);
-                        await session.RunAsync(stoppingToken);
+                        if (_settings.ProxyMode)
+                        {
+                            var session = new ProxySession(_settings, _connections, connection, client, _telemetryStore);
+                            await session.RunAsync(stoppingToken);
+                        }
+                        else
+                        {
+                            var session = new DeviceSession(_connections, connection, client, _telemetryStore);
+                            await session.RunAsync(stoppingToken);
+                        }
                     }
                     catch (Exception ex)
                     {

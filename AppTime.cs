@@ -33,7 +33,10 @@ public static class AppTime
     }
 
     public static DateTime DeviceTimeToUtc(DateTime deviceTime) =>
-        deviceTime.AddHours(-_deviceUtcOffset);
+        AsUtc(deviceTime.AddHours(-_deviceUtcOffset));
+
+    public static DateTime AsUtc(DateTime value) =>
+        value.Kind == DateTimeKind.Utc ? value : DateTime.SpecifyKind(value, DateTimeKind.Utc);
 
     public static string FormatUtcOffset(int offset) =>
         $"UTC{(offset >= 0 ? "+" : "")}{offset}";

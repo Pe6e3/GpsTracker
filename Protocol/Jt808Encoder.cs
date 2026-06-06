@@ -9,13 +9,22 @@ public static class Jt808Encoder
         ushort serverSerial,
         ushort originalSerial,
         ushort originalMessageId,
+        byte result = 0) =>
+        BuildGeneralResponse(terminalId, ReadOnlySpan<byte>.Empty, serverSerial, originalSerial, originalMessageId, result);
+
+    public static byte[] BuildGeneralResponse(
+        string terminalId,
+        ReadOnlySpan<byte> terminalIdBytes,
+        ushort serverSerial,
+        ushort originalSerial,
+        ushort originalMessageId,
         byte result = 0)
     {
         var body = new byte[5];
         WriteUInt16(body, 0, originalSerial);
         WriteUInt16(body, 2, originalMessageId);
         body[4] = result;
-        return BuildFrame(Jt808Parser.MsgGeneralResponse, terminalId, serverSerial, body);
+        return BuildFrame(Jt808Parser.MsgGeneralResponse, terminalId, terminalIdBytes, serverSerial, body);
     }
 
     public static byte[] BuildRegistrationResponse(
@@ -23,23 +32,49 @@ public static class Jt808Encoder
         ushort serverSerial,
         ushort originalSerial,
         byte result,
-        string authCode)
+        string authCode) =>
+        BuildRegistrationResponse(
+            terminalId,
+            ReadOnlySpan<byte>.Empty,
+            serverSerial,
+            originalSerial,
+            result,
+            Encoding.ASCII.GetBytes(authCode));
+
+    public static byte[] BuildRegistrationResponse(
+        string terminalId,
+        ReadOnlySpan<byte> terminalIdBytes,
+        ushort serverSerial,
+        ushort originalSerial,
+        byte result,
+        ReadOnlySpan<byte> authCodeBytes)
     {
-        var authBytes = Encoding.ASCII.GetBytes(authCode);
-        var body = new byte[3 + authBytes.Length];
+        var body = new byte[3 + authCodeBytes.Length];
         WriteUInt16(body, 0, originalSerial);
         body[2] = result;
-        authBytes.CopyTo(body, 3);
-        return BuildFrame(Jt808Parser.MsgRegistrationResponse, terminalId, serverSerial, body);
+        authCodeBytes.CopyTo(body.AsSpan(3));
+        return BuildFrame(Jt808Parser.MsgRegistrationResponse, terminalId, terminalIdBytes, serverSerial, body);
     }
 
-    private static byte[] BuildFrame(ushort messageId, string terminalId, ushort serial, ReadOnlySpan<byte> body)
+    public static byte[] BuildTimeSyncResponse(string terminalId, ushort serverSerial, DateTime deviceLocalTime)
+    {
+        var body = Jt808Bcd.EncodeDateTime(deviceLocalTime);
+        return BuildFrame(Jt808Parser.MsgTimeSyncResponse, terminalId, ReadOnlySpan<byte>.Empty, serverSerial, body);
+    }
+
+    public static byte[] BuildLocationQuery(string terminalId, ushort serverSerial) =>
+        BuildFrame(Jt808Parser.MsgLocationQuery, terminalId, ReadOnlySpan<byte>.Empty, serverSerial, ReadOnlySpan<byte>.Empty);
+
+    private static byte[] BuildFrame(ushort messageId, string terminalId, ReadOnlySpan<byte> terminalIdBytes, ushort serial, ReadOnlySpan<byte> body)
     {
         var properties = (ushort)(body.Length & 0x03FF);
         var header = new byte[12];
         WriteUInt16(header, 0, messageId);
         WriteUInt16(header, 2, properties);
-        Jt808Bcd.EncodeTerminalId(terminalId).CopyTo(header, 4);
+        if (terminalIdBytes.Length >= 6)
+            terminalIdBytes.Slice(0, 6).CopyTo(header.AsSpan(4));
+        else
+            Jt808Bcd.EncodeTerminalId(terminalId).CopyTo(header, 4);
         WriteUInt16(header, 10, serial);
 
         var payload = new byte[12 + body.Length + 1];

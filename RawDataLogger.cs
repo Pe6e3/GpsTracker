@@ -6,7 +6,6 @@ public static class RawDataLogger
 {
     private const string ServerIcon = "🖥️";
     private static readonly object Lock = new();
-    private static readonly string LogsDirectory = Path.Combine(AppContext.BaseDirectory, "logs", "raw_data");
 
     public static void LogPacket(ProxyConnection connection, string direction, ReadOnlySpan<byte> data)
     {
@@ -24,11 +23,7 @@ public static class RawDataLogger
             .ToString();
 
         lock (Lock)
-        {
-            Directory.CreateDirectory(LogsDirectory);
-            var logPath = Path.Combine(LogsDirectory, $"{AppTime.NowLocal():yyyy-MM-dd}.log");
-            File.AppendAllText(logPath, line, Encoding.UTF8);
-        }
+            LogFiles.Raw.Append(line);
     }
 
     private static string FormatFlow(string deviceName, string direction)

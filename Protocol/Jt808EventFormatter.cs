@@ -47,7 +47,13 @@ public static class Jt808EventFormatter
 
     private static string FormatAuthenticationLine(Jt808Message message)
     {
-        var token = message.Body.Length > 0 ? Jt808Bcd.DecodeDigits(message.Body) : string.Empty;
+        if (message.Body.Length == 0)
+            return "Тип пакета: аутентификация";
+
+        var token = message.Body.Length >= 6
+            ? Jt808Bcd.DecodeDigits(message.Body.AsSpan(0, 6))
+            : Jt808Bcd.DecodeDigits(message.Body);
+
         if (string.IsNullOrEmpty(token))
             return "Тип пакета: аутентификация";
 
