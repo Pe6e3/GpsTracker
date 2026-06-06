@@ -8,6 +8,7 @@ public sealed class ProxySettings
     public string RemoteHost { get; set; } = "27.aika168.com";
     public int RemotePort { get; set; } = 8185;
     public int UtcOffset { get; set; } = 5;
+    public int ServerUtcOffset { get; set; } = 2;
     public int DeviceUtcOffset { get; set; } = 8;
 
     public static ProxySettings Load(string path)

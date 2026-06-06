@@ -23,8 +23,9 @@ TrafficLogger.LogInfo("GPS TCP Proxy запущен");
 TrafficLogger.LogInfo($"Слушаю порт: {settings.ListenPort}");
 TrafficLogger.LogInfo($"Перенаправление на: {settings.RemoteHost}:{settings.RemotePort}");
 TrafficLogger.LogInfo("Raw-лог: logs/raw_data/");
-TrafficLogger.LogInfo($"Часовой пояс логов: UTC{(settings.UtcOffset >= 0 ? "+" : "")}{settings.UtcOffset}");
-TrafficLogger.LogInfo($"Часовой пояс устройства: UTC{(settings.DeviceUtcOffset >= 0 ? "+" : "")}{settings.DeviceUtcOffset}");
+TrafficLogger.LogInfo($"Часовой пояс логов: {AppTime.FormatUtcOffset(settings.UtcOffset)}");
+TrafficLogger.LogInfo($"Часовой пояс сервера: {AppTime.FormatUtcOffset(settings.ServerUtcOffset)}");
+TrafficLogger.LogInfo($"Часовой пояс устройства: {AppTime.FormatUtcOffset(settings.DeviceUtcOffset)}");
 TrafficLogger.LogInfo("Ожидание подключений GPS-трекера...");
 
 try
