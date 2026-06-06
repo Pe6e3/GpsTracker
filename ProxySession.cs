@@ -11,6 +11,7 @@ public sealed class ProxySession
     private readonly ConnectionManager _connections;
     private readonly ProxyConnection _connection;
     private readonly TcpClient _client;
+    private readonly TelemetryStore _telemetryStore;
     private readonly Jt808FrameBuffer _clientBuffer = new();
     private readonly Jt808FrameBuffer _serverBuffer = new();
 
@@ -18,12 +19,14 @@ public sealed class ProxySession
         ProxySettings settings,
         ConnectionManager connections,
         ProxyConnection connection,
-        TcpClient client)
+        TcpClient client,
+        TelemetryStore telemetryStore)
     {
         _settings = settings;
         _connections = connections;
         _connection = connection;
         _client = client;
+        _telemetryStore = telemetryStore;
     }
 
     public async Task RunAsync(CancellationToken cancellationToken)
@@ -133,6 +136,18 @@ public sealed class ProxySession
 
             if (!Jt808PacketTypes.IsFromTerminal(message.MessageId))
                 continue;
+
+            if (message.MessageId == Jt808Parser.MsgLocationReport)
+            {
+                try
+                {
+                    _telemetryStore.SaveLocation(message);
+                }
+                catch (Exception ex)
+                {
+                    TrafficLogger.LogInfo($"Ошибка записи телеметрии: {ex.Message}");
+                }
+            }
 
             TrafficLogger.LogDevicePacket(_connection, message);
         }

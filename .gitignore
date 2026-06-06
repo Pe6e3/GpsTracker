@@ -16,6 +16,10 @@ logs/
 appsettings.json
 devices.json
 
+# Database
+data/
+*.db
+
 # OS
 .DS_Store
 Thumbs.db

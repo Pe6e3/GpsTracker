@@ -23,11 +23,17 @@ public static class AppTime
     public static DateTime UtcToLocal(DateTime utc) =>
         utc.AddHours(_utcOffset);
 
+    public static DateTime LocalToUtc(DateTime local) =>
+        local.AddHours(-_utcOffset);
+
     public static DateTime DeviceTimeToLocal(DateTime deviceTime)
     {
-        var utc = deviceTime.AddHours(-_deviceUtcOffset);
+        var utc = DeviceTimeToUtc(deviceTime);
         return utc.AddHours(_utcOffset);
     }
+
+    public static DateTime DeviceTimeToUtc(DateTime deviceTime) =>
+        deviceTime.AddHours(-_deviceUtcOffset);
 
     public static string FormatUtcOffset(int offset) =>
         $"UTC{(offset >= 0 ? "+" : "")}{offset}";

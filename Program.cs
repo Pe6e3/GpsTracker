@@ -1,61 +1,70 @@
-﻿using System.Net;
-using System.Net.Sockets;
+﻿using System.Text;
 using GpsTcpProxy;
+using GpsTcpProxy.Services;
+using Microsoft.AspNetCore.Authentication.JwtBearer;
+using Microsoft.IdentityModel.Tokens;
 
 var baseDir = AppContext.BaseDirectory;
-var settings = ProxySettings.Load(Path.Combine(baseDir, "appsettings.json"));
+var settingsPath = Path.Combine(baseDir, "appsettings.json");
+var settings = ProxySettings.Load(settingsPath);
+
 AppTime.Configure(settings);
 DeviceRegistry.Load(Path.Combine(baseDir, "devices.json"));
-var connections = new ConnectionManager();
 
-using var cts = new CancellationTokenSource();
-Console.CancelKeyPress += (_, e) =>
+var builder = WebApplication.CreateBuilder(args);
+
+builder.Logging.AddFilter("Microsoft.AspNetCore", LogLevel.Warning);
+builder.Logging.AddFilter("Microsoft.AspNetCore.DataProtection", LogLevel.Error);
+builder.Logging.AddFilter("Microsoft.Hosting.Lifetime", LogLevel.Warning);
+
+builder.WebHost.UseUrls($"http://0.0.0.0:{settings.ApiPort}");
+
+builder.Services.AddSingleton(settings);
+builder.Services.AddSingleton<TelemetryStore>(_ =>
 {
-    e.Cancel = true;
-    cts.Cancel();
-    TrafficLogger.LogInfo("Получен сигнал остановки (Ctrl+C)");
-};
+    var store = new TelemetryStore(settings.DatabasePath);
+    store.Initialize();
+    return store;
+});
+builder.Services.AddSingleton<ConnectionManager>();
+builder.Services.AddSingleton<AuthService>();
+builder.Services.AddSingleton<TrackQueryService>();
+builder.Services.AddHostedService<TcpProxyHostedService>();
 
-var listener = new TcpListener(IPAddress.Any, settings.ListenPort);
-listener.Start();
+builder.Services.AddControllers();
+builder.Services.AddAuthentication(JwtBearerDefaults.AuthenticationScheme)
+    .AddJwtBearer(options =>
+    {
+        options.TokenValidationParameters = new TokenValidationParameters
+        {
+            ValidateIssuer = true,
+            ValidateAudience = true,
+            ValidateLifetime = true,
+            ValidateIssuerSigningKey = true,
+            ValidIssuer = settings.JwtIssuer,
+            ValidAudience = settings.JwtAudience,
+            IssuerSigningKey = new SymmetricSecurityKey(Encoding.UTF8.GetBytes(settings.JwtSecret))
+        };
+    });
+builder.Services.AddAuthorization();
 
-TrafficLogger.LogInfo("GPS TCP Proxy запущен");
-TrafficLogger.LogInfo($"Слушаю порт: {settings.ListenPort}");
-TrafficLogger.LogInfo($"Перенаправление на: {settings.RemoteHost}:{settings.RemotePort}");
-TrafficLogger.LogInfo("Raw-лог: logs/raw_data/");
-TrafficLogger.LogInfo($"Часовой пояс логов: {AppTime.FormatUtcOffset(settings.UtcOffset)}");
-TrafficLogger.LogInfo($"Часовой пояс сервера: {AppTime.FormatUtcOffset(settings.ServerUtcOffset)}");
-TrafficLogger.LogInfo($"Часовой пояс устройства: {AppTime.FormatUtcOffset(settings.DeviceUtcOffset)}");
-TrafficLogger.LogInfo("Ожидание подключений GPS-трекера...");
+var app = builder.Build();
+
+app.UseAuthentication();
+app.UseAuthorization();
+app.MapControllers();
+
+TrafficLogger.LogInfo($"HTTP API: http://0.0.0.0:{settings.ApiPort}");
+TrafficLogger.LogInfo($"TCP GPS: порт {settings.ListenPort} (запуск после API)");
 
 try
 {
-    while (!cts.Token.IsCancellationRequested)
-    {
-        var client = await listener.AcceptTcpClientAsync(cts.Token);
-        var clientIp = client.Client.RemoteEndPoint?.ToString() ?? "unknown";
-        var connection = connections.Register(clientIp);
-
-        _ = Task.Run(async () =>
-        {
-            try
-            {
-                var session = new ProxySession(settings, connections, connection, client);
-                await session.RunAsync(CancellationToken.None);
-            }
-            catch (Exception ex)
-            {
-                TrafficLogger.LogInfo($"Ошибка сессии: {ex.Message}");
-            }
-        }, CancellationToken.None);
-    }
+    app.Run();
 }
-catch (OperationCanceledException)
+catch (IOException ex) when (ex.Message.Contains("address already in use", StringComparison.OrdinalIgnoreCase))
 {
-    TrafficLogger.LogInfo("Прокси остановлен");
-}
-finally
-{
-    listener.Stop();
-    TrafficLogger.LogInfo("TCP-сервер остановлен");
+    TrafficLogger.LogInfo($"Порт API {settings.ApiPort} занят другим процессом.");
+    TrafficLogger.LogInfo($"Проверка: ss -tlnp | grep {settings.ApiPort}");
+    TrafficLogger.LogInfo("Измените ApiPort в appsettings.json (5080 занят SocketServer на этом сервере).");
+    throw;
 }

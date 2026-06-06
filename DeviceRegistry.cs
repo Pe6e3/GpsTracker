@@ -1,4 +1,5 @@
 using System.Text.Json;
+using GpsTcpProxy.Models;
 
 namespace GpsTcpProxy;
 
@@ -56,4 +57,16 @@ public static class DeviceRegistry
 
         return shortId;
     }
+
+    public static bool Exists(string? terminalId)
+    {
+        var shortId = NormalizeId(terminalId ?? string.Empty);
+        return !string.IsNullOrEmpty(shortId) && Devices.ContainsKey(shortId);
+    }
+
+    public static IReadOnlyList<DeviceDto> GetAll() =>
+        Devices
+            .OrderBy(x => x.Value, StringComparer.OrdinalIgnoreCase)
+            .Select(x => new DeviceDto { Id = x.Key, Name = x.Value })
+            .ToArray();
 }
