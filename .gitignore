@@ -1,0 +1,21 @@
+# Build
+bin/
+obj/
+
+# IDE
+.vs/
+.vscode/
+*.user
+*.suo
+
+# Logs
+logs/
+**/logs/
+
+# Local config (copy from *.example.json)
+appsettings.json
+devices.json
+
+# OS
+.DS_Store
+Thumbs.db
