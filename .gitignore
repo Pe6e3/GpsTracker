@@ -1,25 +1,46 @@
 # Build
 bin/
 obj/
+publish/
+out/
 
 # IDE
 .vs/
 .vscode/
+.idea/
 *.user
 *.suo
+*.DotSettings.user
 
-# Logs
+# Logs & runtime data
 logs/
 **/logs/
+*.log
 
 # Local config (copy from *.example.json)
 appsettings.json
+appsettings.*.json
+!appsettings.example.json
 devices.json
+!devices.example.json
 
-# Database
+# Database (SQLite)
 data/
 *.db
+*.db-shm
+*.db-wal
+*.db-journal
+
+# Secrets / env
+.env
+.env.*
+secrets/
 
 # OS
 .DS_Store
 Thumbs.db
+
+# Editor temp
+*~
+*.swp
+*.swo

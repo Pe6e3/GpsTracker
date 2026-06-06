@@ -1,0 +1,23 @@
+[Unit]
+Description=GPS TCP Proxy (JT/T808) + HTTP API
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+User=__SERVICE_USER__
+Group=__SERVICE_USER__
+WorkingDirectory=__INSTALL_ROOT__/publish
+ExecStart=/usr/bin/dotnet __INSTALL_ROOT__/publish/GpsTcpProxy.dll
+Restart=on-failure
+RestartSec=5
+KillSignal=SIGINT
+TimeoutStopSec=30
+Environment=ASPNETCORE_ENVIRONMENT=Production
+Environment=DOTNET_PRINT_TELEMETRY_MESSAGE=false
+StandardOutput=journal
+StandardError=journal
+SyslogIdentifier=gpstcpproxy
+
+[Install]
+WantedBy=multi-user.target
