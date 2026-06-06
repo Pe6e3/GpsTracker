@@ -65,6 +65,5 @@ catch (IOException ex) when (ex.Message.Contains("address already in use", Strin
 {
     TrafficLogger.LogInfo($"Порт API {settings.ApiPort} занят другим процессом.");
     TrafficLogger.LogInfo($"Проверка: ss -tlnp | grep {settings.ApiPort}");
-    TrafficLogger.LogInfo("Измените ApiPort в appsettings.json (5080 занят SocketServer на этом сервере).");
-    throw;
+    Environment.Exit(1);
 }

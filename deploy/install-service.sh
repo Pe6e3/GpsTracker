@@ -30,6 +30,10 @@ if [[ ! -f "$PUBLISH/data/telemetry.db" ]]; then
   done
 fi
 
+echo "==> Stop manual instances..."
+pkill -x GpsTcpProxy 2>/dev/null || true
+sleep 1
+
 echo "==> Install systemd unit (user: $SERVICE_USER)..."
 sed \
   -e "s|__SERVICE_USER__|$SERVICE_USER|g" \
