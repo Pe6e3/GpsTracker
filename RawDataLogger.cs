@@ -14,7 +14,7 @@ public static class RawDataLogger
             return;
 
         var line = new StringBuilder()
-            .Append(DateTime.Now.ToString("dd.MM.yy HH:mm:ss"))
+            .Append(AppTime.NowLocal().ToString("dd.MM.yy HH:mm:ss"))
             .Append(" #").Append(connection.ConnectionId)
             .Append(' ')
             .Append(FormatFlow(DeviceRegistry.GetDisplayName(connection.DeviceLabel), direction))
@@ -26,7 +26,7 @@ public static class RawDataLogger
         lock (Lock)
         {
             Directory.CreateDirectory(LogsDirectory);
-            var logPath = Path.Combine(LogsDirectory, $"{DateTime.Now:yyyy-MM-dd}.log");
+            var logPath = Path.Combine(LogsDirectory, $"{AppTime.NowLocal():yyyy-MM-dd}.log");
             File.AppendAllText(logPath, line, Encoding.UTF8);
         }
     }

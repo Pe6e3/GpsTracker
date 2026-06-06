@@ -26,4 +26,29 @@ public static class Jt808Bcd
 
         return $"20{data[0]:X2}-{data[1]:X2}-{data[2]:X2} {data[3]:X2}:{data[4]:X2}:{data[5]:X2}";
     }
+
+    public static bool TryParseDateTime(ReadOnlySpan<byte> data, out DateTime value)
+    {
+        value = default;
+        if (data.Length < 6)
+            return false;
+
+        try
+        {
+            value = new DateTime(
+                2000 + BcdNibble(data[0]),
+                BcdNibble(data[1]),
+                BcdNibble(data[2]),
+                BcdNibble(data[3]),
+                BcdNibble(data[4]),
+                BcdNibble(data[5]));
+            return true;
+        }
+        catch
+        {
+            return false;
+        }
+    }
+
+    private static int BcdNibble(byte value) => ((value >> 4) & 0x0F) * 10 + (value & 0x0F);
 }

@@ -4,6 +4,7 @@ using GpsTcpProxy;
 
 var baseDir = AppContext.BaseDirectory;
 var settings = ProxySettings.Load(Path.Combine(baseDir, "appsettings.json"));
+AppTime.Configure(settings);
 DeviceRegistry.Load(Path.Combine(baseDir, "devices.json"));
 var connections = new ConnectionManager();
 
@@ -22,6 +23,8 @@ TrafficLogger.LogInfo("GPS TCP Proxy запущен");
 TrafficLogger.LogInfo($"Слушаю порт: {settings.ListenPort}");
 TrafficLogger.LogInfo($"Перенаправление на: {settings.RemoteHost}:{settings.RemotePort}");
 TrafficLogger.LogInfo("Raw-лог: logs/raw_data/");
+TrafficLogger.LogInfo($"Часовой пояс логов: UTC{(settings.UtcOffset >= 0 ? "+" : "")}{settings.UtcOffset}");
+TrafficLogger.LogInfo($"Часовой пояс устройства: UTC{(settings.DeviceUtcOffset >= 0 ? "+" : "")}{settings.DeviceUtcOffset}");
 TrafficLogger.LogInfo("Ожидание подключений GPS-трекера...");
 
 try

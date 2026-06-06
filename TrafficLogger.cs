@@ -15,11 +15,14 @@ public static class TrafficLogger
     {
         connection.Touch();
 
+        var line = Jt808EventFormatter.FormatLogLine(message);
+        if (line == null)
+            return;
+
         var deviceName = DeviceRegistry.GetDisplayName(
             string.IsNullOrWhiteSpace(message.TerminalId) ? connection.DeviceLabel : message.TerminalId);
 
-        var payload = Jt808EventFormatter.FormatDeviceLog(message);
-        WriteLine($"[{Timestamp()}] [{deviceName}] Тип пакета: {payload}");
+        WriteLine($"[{Timestamp()}] [{deviceName}] {line}");
     }
 
     public static void LogUnparsedDeviceData(ProxyConnection connection, int bytes)
@@ -38,10 +41,10 @@ public static class TrafficLogger
         {
             Console.Write(message);
             Directory.CreateDirectory(LogsDirectory);
-            var logPath = Path.Combine(LogsDirectory, $"{DateTime.Now:yyyy-MM-dd}.log");
+            var logPath = Path.Combine(LogsDirectory, $"{AppTime.NowLocal():yyyy-MM-dd}.log");
             File.AppendAllText(logPath, message, Encoding.UTF8);
         }
     }
 
-    private static string Timestamp() => DateTime.Now.ToString("dd.MM.yyyy HH:mm:ss");
+    private static string Timestamp() => AppTime.NowLocal().ToString("dd.MM.yyyy HH:mm:ss");
 }
