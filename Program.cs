@@ -23,6 +23,7 @@ builder.WebHost.UseUrls($"http://0.0.0.0:{settings.ApiPort}");
 
 builder.Services.AddSingleton(settings);
 builder.Services.AddSingleton(settings.Mqtt);
+builder.Services.AddSingleton(settings.Telegram);
 builder.Services.AddSingleton(sp =>
 {
     var geofenceStore = new GeofenceStore(settings.DatabasePath);
@@ -32,7 +33,10 @@ builder.Services.AddSingleton(sp =>
 builder.Services.AddSingleton<GeofenceService>();
 builder.Services.AddSingleton<TelemetryStore>(sp =>
 {
-    var store = new TelemetryStore(settings.DatabasePath, sp.GetRequiredService<GeofenceService>());
+    var store = new TelemetryStore(
+        settings.DatabasePath,
+        sp.GetRequiredService<GeofenceService>(),
+        sp.GetRequiredService<TelegramService>());
     store.Initialize();
     return store;
 });
@@ -42,6 +46,7 @@ builder.Services.AddSingleton<TrackQueryService>();
 builder.Services.AddSingleton<ServiceStatusService>();
 builder.Services.AddSingleton<OwnTracksDeviceHandler>();
 builder.Services.AddSingleton<MqttService>();
+builder.Services.AddSingleton<TelegramService>();
 builder.Services.AddHostedService<TcpProxyHostedService>();
 builder.Services.AddHostedService<LogRotationHostedService>();
 builder.Services.AddHostedService<MqttHostedService>();
@@ -76,6 +81,13 @@ if (settings.Mqtt.Enabled)
     TrafficLogger.LogInfo($"MQTT OwnTracks: {settings.Mqtt.Host}:{settings.Mqtt.Port}, topic {settings.Mqtt.Topic}");
 else
     TrafficLogger.LogInfo("MQTT OwnTracks: disabled");
+
+if (settings.Telegram.Enabled &&
+    !string.IsNullOrWhiteSpace(settings.Telegram.BotToken) &&
+    !string.IsNullOrWhiteSpace(settings.Telegram.ChatId))
+    TrafficLogger.LogInfo("Telegram: enabled");
+else
+    TrafficLogger.LogInfo("Telegram: disabled");
 
 try
 {

@@ -22,6 +22,7 @@ public sealed class ProxySettings
     public string JwtAudience { get; set; } = "GpsTcpProxyClient";
     public int JwtExpireHours { get; set; } = 24;
     public MqttSettings Mqtt { get; set; } = new();
+    public TelegramSettings Telegram { get; set; } = new();
 
     public static ProxySettings Load(string path)
     {

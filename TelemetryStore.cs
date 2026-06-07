@@ -11,11 +11,13 @@ public sealed class TelemetryStore : IDisposable
     private readonly string _connectionString;
     private readonly string _databaseFullPath;
     private readonly GeofenceService? _geofenceService;
+    private readonly TelegramService? _telegramService;
     private readonly object _lock = new();
 
-    public TelemetryStore(string databasePath, GeofenceService? geofenceService = null)
+    public TelemetryStore(string databasePath, GeofenceService? geofenceService = null, TelegramService? telegramService = null)
     {
         _geofenceService = geofenceService;
+        _telegramService = telegramService;
         _databaseFullPath = Path.IsPathRooted(databasePath)
             ? databasePath
             : Path.Combine(AppContext.BaseDirectory, databasePath);
@@ -150,6 +152,8 @@ public sealed class TelemetryStore : IDisposable
             command.Parameters.AddWithValue("$geofence_names", geofenceNamesJson);
             command.ExecuteNonQuery();
         }
+
+        NotifyLocationChanged(normalizedId, deviceName, location.Latitude, location.Longitude, location.VelocityKmh ?? 0, location.Altitude ?? 0, gpsTimeUtc, geofenceNamesJson);
     }
 
     private static void EnsureColumn(SqliteConnection connection, string columnName, string columnType)
@@ -242,6 +246,8 @@ public sealed class TelemetryStore : IDisposable
             command.Parameters.AddWithValue("$geofence_names", geofenceNamesJson);
             command.ExecuteNonQuery();
         }
+
+        NotifyLocationChanged(deviceId, deviceName, location.Latitude, location.Longitude, location.SpeedKmh, location.Altitude, gpsTimeUtc, geofenceNamesJson);
     }
 
     public void SaveGt06Location(string? deviceLabel, Gt06Message message)
@@ -315,6 +321,25 @@ public sealed class TelemetryStore : IDisposable
             command.Parameters.AddWithValue("$geofence_names", geofenceNamesJson);
             command.ExecuteNonQuery();
         }
+
+        NotifyLocationChanged(deviceId, deviceName, location.Latitude, location.Longitude, location.SpeedKmh, 0, gpsTimeUtc, geofenceNamesJson);
+    }
+
+    private void NotifyLocationChanged(
+        string deviceId,
+        string? deviceName,
+        double latitude,
+        double longitude,
+        double speedKmh,
+        int altitude,
+        DateTime gpsTimeUtc,
+        string geofenceNamesJson)
+    {
+        if (_telegramService == null)
+            return;
+
+        var geofences = GeofenceStore.DeserializeNames(geofenceNamesJson);
+        _telegramService.NotifyLocationChanged(deviceId, deviceName, latitude, longitude, speedKmh, altitude, gpsTimeUtc, geofences);
     }
 
     public IReadOnlyList<TelemetryPoint> GetTrack(
