@@ -90,6 +90,13 @@ public sealed class OwnTracksDeviceHandler
         }
 
         var deviceName = DeviceRegistry.GetDisplayName(deviceId);
+        if (location.Accuracy.HasValue && location.Accuracy.Value > TelemetryStore.OwnTracksNoCoordinatesAccuracyM)
+        {
+            MqttLogger.LogInfo(
+                $"location {deviceName}: no coords (acc={location.Accuracy:F0}m) batt={location.Battery}%");
+            return;
+        }
+
         MqttLogger.LogInfo(
             $"location {deviceName}: {location.Latitude:F5},{location.Longitude:F5} acc={location.Accuracy:F0}m batt={location.Battery}%");
     }

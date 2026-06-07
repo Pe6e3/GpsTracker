@@ -2,8 +2,9 @@ namespace GpsTcpProxy.Models;
 
 public sealed class TrackPointDto
 {
-    public double Lat { get; init; }
-    public double Lon { get; init; }
+    public double? Lat { get; init; }
+    public double? Lon { get; init; }
+    public double? Accuracy { get; init; }
     public int Alt { get; init; }
     public double Speed { get; init; }
     public int Direction { get; init; }

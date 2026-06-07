@@ -6,10 +6,12 @@ namespace GpsTcpProxy.Services;
 public sealed class TrackQueryService
 {
     private readonly TelemetryStore _telemetryStore;
+    private readonly double _maxTrackAccuracyMeters;
 
-    public TrackQueryService(TelemetryStore telemetryStore)
+    public TrackQueryService(TelemetryStore telemetryStore, MqttSettings mqttSettings)
     {
         _telemetryStore = telemetryStore;
+        _maxTrackAccuracyMeters = mqttSettings.MaxTrackAccuracyMeters;
     }
 
     public TrackResponse? GetTrack(string deviceId, string? from, string? to)
@@ -72,16 +74,32 @@ public sealed class TrackQueryService
         throw new ArgumentException($"Неверный формат даты: {value}");
     }
 
-    private static TrackPointDto MapPoint(TelemetryPoint point) =>
-        new()
+    private TrackPointDto MapPoint(TelemetryPoint point)
+    {
+        var exposeCoordinates = HasTrackCoordinates(point);
+
+        return new TrackPointDto
         {
-            Lat = point.Latitude,
-            Lon = point.Longitude,
+            Lat = exposeCoordinates ? point.Latitude : null,
+            Lon = exposeCoordinates ? point.Longitude : null,
             Alt = point.Altitude,
             Speed = point.SpeedKmh,
             Direction = point.Direction,
+            Accuracy = point.Accuracy,
             TimeUtc = AppTime.AsUtc(point.GpsTimeUtc).ToString("O", CultureInfo.InvariantCulture),
             TimeLocal = AppTime.UtcToLocal(point.GpsTimeUtc).ToString("dd.MM.yyyy HH:mm:ss", CultureInfo.InvariantCulture),
             Geofences = point.Geofences.ToArray()
         };
+    }
+
+    private bool HasTrackCoordinates(TelemetryPoint point)
+    {
+        if (!point.Latitude.HasValue || !point.Longitude.HasValue)
+            return false;
+
+        if (!point.Accuracy.HasValue)
+            return true;
+
+        return point.Accuracy.Value <= _maxTrackAccuracyMeters;
+    }
 }

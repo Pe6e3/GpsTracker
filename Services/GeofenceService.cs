@@ -6,10 +6,12 @@ namespace GpsTcpProxy.Services;
 public sealed class GeofenceService
 {
     private readonly GeofenceStore _geofenceStore;
+    private readonly TelegramService _telegramService;
 
-    public GeofenceService(GeofenceStore geofenceStore)
+    public GeofenceService(GeofenceStore geofenceStore, TelegramService telegramService)
     {
         _geofenceStore = geofenceStore;
+        _telegramService = telegramService;
     }
 
     public IReadOnlyList<GeofenceDto> GetForUser(string ownerUser) =>
@@ -50,7 +52,7 @@ public sealed class GeofenceService
         var matched = MatchGeofences(latitude, longitude);
         var currentNames = matched.Select(g => g.Name).OrderBy(name => name, StringComparer.OrdinalIgnoreCase).ToArray();
 
-        LogTransitions(normalizedId, previousNames, currentNames);
+        NotifyTransitions(normalizedId, previousNames, currentNames);
 
         return new GeofencePointResult
         {
@@ -63,7 +65,7 @@ public sealed class GeofenceService
             .Where(g => GeofencePolygon.Contains(g.Points, latitude, longitude))
             .ToArray();
 
-    private static void LogTransitions(string deviceId, IReadOnlyList<string> previousNames, IReadOnlyList<string> currentNames)
+    private void NotifyTransitions(string deviceId, IReadOnlyList<string> previousNames, IReadOnlyList<string> currentNames)
     {
         var previous = new HashSet<string>(previousNames, StringComparer.OrdinalIgnoreCase);
         var current = new HashSet<string>(currentNames, StringComparer.OrdinalIgnoreCase);
@@ -75,10 +77,16 @@ public sealed class GeofenceService
         var label = deviceName == deviceId || deviceName == "?" ? deviceId : $"{deviceName} ({deviceId})";
 
         foreach (var name in previous.Except(current, StringComparer.OrdinalIgnoreCase).OrderBy(x => x, StringComparer.OrdinalIgnoreCase))
+        {
             TrafficLogger.LogInfo($"[GEOFENCE] {label}: вышел из «{name}»");
+            _telegramService.NotifyGeofenceTransition(deviceId, deviceName, name, entered: false);
+        }
 
         foreach (var name in current.Except(previous, StringComparer.OrdinalIgnoreCase).OrderBy(x => x, StringComparer.OrdinalIgnoreCase))
+        {
             TrafficLogger.LogInfo($"[GEOFENCE] {label}: вошёл в «{name}»");
+            _telegramService.NotifyGeofenceTransition(deviceId, deviceName, name, entered: true);
+        }
     }
 
     private static void ValidateRequest(string name, IReadOnlyList<GeofencePointDto> points)

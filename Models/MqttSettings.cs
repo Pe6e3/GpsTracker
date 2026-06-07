@@ -15,4 +15,5 @@ public sealed class MqttSettings
     public string OwnTracksUser { get; set; } = string.Empty;
     public int ReconnectDelaySeconds { get; set; } = 5;
     public bool LogPayload { get; set; } = true;
+    public double MaxTrackAccuracyMeters { get; set; } = 25;
 }

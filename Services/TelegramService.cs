@@ -13,10 +13,12 @@ public sealed class TelegramService
     };
 
     private readonly TelegramSettings _settings;
+    private readonly TelegramNotificationGate _notificationGate;
 
-    public TelegramService(TelegramSettings settings)
+    public TelegramService(TelegramSettings settings, TelegramNotificationGate notificationGate)
     {
         _settings = settings;
+        _notificationGate = notificationGate;
     }
 
     public bool IsConfigured =>
@@ -24,45 +26,62 @@ public sealed class TelegramService
         !string.IsNullOrWhiteSpace(_settings.BotToken) &&
         !string.IsNullOrWhiteSpace(_settings.ChatId);
 
-    public void NotifyLocationChanged(
-        string deviceId,
-        string? deviceName,
-        double latitude,
-        double longitude,
-        double speedKmh,
-        int altitude,
-        DateTime gpsTimeUtc,
-        IReadOnlyList<string> geofences)
+    public void NotifyGeofenceTransition(string deviceId, string? deviceName, string geofenceName, bool entered)
     {
-        if (!IsConfigured)
+        if (!IsConfigured || !_notificationGate.CanNotify)
             return;
 
-        var text = FormatLocationMessage(deviceId, deviceName, latitude, longitude, speedKmh, altitude, gpsTimeUtc, geofences);
-        _ = SendMessageAsync(text);
+        var label = FormatDeviceLabel(deviceId, deviceName);
+        var action = entered ? "вошёл в" : "вышел из";
+        var icon = entered ? "⬡✅" : "⬡🚪";
+        var text = $"{icon} {label}\n{action} «{geofenceName}»";
+        _ = SendRawAsync(text);
     }
 
-    private static string FormatLocationMessage(
+    public void NotifyTheftAlert(
         string deviceId,
         string? deviceName,
-        double latitude,
-        double longitude,
-        double speedKmh,
-        int altitude,
-        DateTime gpsTimeUtc,
-        IReadOnlyList<string> geofences)
+        string phoneDeviceId,
+        string? phoneDeviceName,
+        double deviceLat,
+        double deviceLon,
+        double phoneLat,
+        double phoneLon,
+        double distanceKm,
+        double deviceSpeedKmh,
+        double phoneSpeedKmh,
+        string gpsTimeLocal)
     {
-        var label = FormatDeviceLabel(deviceId, deviceName);
-        var gpsTimeLocal = AppTime.UtcToLocal(gpsTimeUtc).ToString("dd.MM.yyyy HH:mm:ss", CultureInfo.InvariantCulture);
-        var geofenceText = geofences.Count > 0
-            ? string.Join(", ", geofences)
-            : "—";
+        if (!IsConfigured || !_notificationGate.CanNotify)
+            return;
 
-        return
-            $"📍 {label}\n" +
-            $"{latitude:F5}, {longitude:F5}\n" +
-            $"Скорость: {speedKmh:F1} км/ч, высота: {altitude} м\n" +
+        var deviceLabel = FormatDeviceLabel(deviceId, deviceName);
+        var phoneLabel = FormatDeviceLabel(phoneDeviceId, phoneDeviceName);
+        var mapBaseUrl = _settings.MapBaseUrl.Trim().TrimEnd('/');
+        var mapUrl = $"{mapBaseUrl}/{Uri.EscapeDataString(deviceId)}";
+
+        var text =
+            $"🚨 ВОЗМОЖНЫЙ УГОН\n" +
+            $"{deviceLabel}\n" +
+            $"{deviceLat:F5}, {deviceLon:F5}\n" +
+            $"Скорость: {deviceSpeedKmh:F0} км/ч\n" +
             $"GPS: {gpsTimeLocal}\n" +
-            $"Геозоны: {geofenceText}";
+            $"Расстояние до {phoneLabel}: {distanceKm:F2} км\n" +
+            $"(телефон {phoneSpeedKmh:F0} км/ч)\n" +
+            $"Карта: {mapUrl}";
+
+        _ = SendRawAsync(text);
+    }
+
+    public Task SendRawAsync(string text, CancellationToken cancellationToken = default) =>
+        SendRawAsync(text, parseMode: null, cancellationToken);
+
+    public Task SendRawAsync(string text, string? parseMode, CancellationToken cancellationToken = default)
+    {
+        if (!IsConfigured)
+            return Task.CompletedTask;
+
+        return SendMessageAsync(text, parseMode, cancellationToken);
     }
 
     private static string FormatDeviceLabel(string deviceId, string? deviceName)
@@ -73,7 +92,7 @@ public sealed class TelegramService
         return $"{deviceName} ({deviceId})";
     }
 
-    private async Task SendMessageAsync(string text)
+    private async Task SendMessageAsync(string text, string? parseMode, CancellationToken cancellationToken)
     {
         try
         {
@@ -82,17 +101,18 @@ public sealed class TelegramService
             {
                 ChatId = _settings.ChatId.Trim(),
                 Text = text,
+                ParseMode = parseMode,
                 DisableWebPagePreview = true
             };
 
-            using var response = await HttpClient.PostAsJsonAsync(url, payload);
+            using var response = await HttpClient.PostAsJsonAsync(url, payload, cancellationToken);
             if (response.IsSuccessStatusCode)
                 return;
 
-            var body = await response.Content.ReadAsStringAsync();
+            var body = await response.Content.ReadAsStringAsync(cancellationToken);
             TelegramLogger.LogError($"send failed ({(int)response.StatusCode}): {body}");
         }
-        catch (Exception ex)
+        catch (Exception ex) when (ex is not OperationCanceledException)
         {
             TelegramLogger.LogError($"send failed: {ex.Message}");
         }
@@ -105,6 +125,9 @@ public sealed class TelegramService
 
         [JsonPropertyName("text")]
         public required string Text { get; init; }
+
+        [JsonPropertyName("parse_mode")]
+        public string? ParseMode { get; init; }
 
         [JsonPropertyName("disable_web_page_preview")]
         public bool DisableWebPagePreview { get; init; }
