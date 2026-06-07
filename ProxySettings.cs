@@ -24,6 +24,7 @@ public sealed class ProxySettings
     public MqttSettings Mqtt { get; set; } = new();
     public TelegramSettings Telegram { get; set; } = new();
     public TheftDetectionSettings TheftDetection { get; set; } = new();
+    public TrackProcessingSettings TrackProcessing { get; set; } = new();
 
     public static ProxySettings Load(string path)
     {

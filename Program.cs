@@ -50,6 +50,8 @@ builder.Services.AddSingleton(settings.Mqtt);
 
 builder.Services.AddSingleton(settings.Telegram);
 
+builder.Services.AddSingleton(settings.TrackProcessing);
+
 builder.Services.AddSingleton<TelegramNotificationGate>();
 
 builder.Services.AddSingleton<TelegramService>();
@@ -88,6 +90,20 @@ builder.Services.AddSingleton<TelemetryStore>(sp =>
 
 });
 
+builder.Services.AddSingleton<TrackPointStore>(sp =>
+
+{
+
+    var trackPointStore = new TrackPointStore(settings.DatabasePath);
+
+    trackPointStore.Initialize();
+
+    return trackPointStore;
+
+});
+
+builder.Services.AddSingleton<TrackProcessor>();
+
 builder.Services.AddSingleton<ConnectionManager>();
 
 builder.Services.AddSingleton<AuthService>();
@@ -109,6 +125,8 @@ builder.Services.AddHostedService<LogRotationHostedService>();
 builder.Services.AddHostedService<MqttHostedService>();
 
 builder.Services.AddHostedService<TelegramBotHostedService>();
+
+builder.Services.AddHostedService<TrackProcessingHostedService>();
 
 
 
@@ -209,6 +227,18 @@ if (settings.TheftDetection.Enabled)
 else
 
     TrafficLogger.LogInfo("Theft detection: disabled");
+
+
+
+if (settings.TrackProcessing.Enabled)
+
+    TrafficLogger.LogInfo(
+
+        $"Track processing: enabled (every {settings.TrackProcessing.RunEverySeconds}s, delay {settings.TrackProcessing.ProcessingDelayMinutes}m)");
+
+else
+
+    TrafficLogger.LogInfo("Track processing: disabled");
 
 
 

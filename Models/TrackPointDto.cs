@@ -11,4 +11,5 @@ public sealed class TrackPointDto
     public required string TimeUtc { get; init; }
     public required string TimeLocal { get; init; }
     public string[] Geofences { get; init; } = Array.Empty<string>();
+    public string? PointType { get; init; }
 }

@@ -13,7 +13,18 @@ public sealed class DeviceStatusDto
     public required string Protocol { get; init; }
     public long PointsCount { get; init; }
     public long? LastTelemetryAgoSeconds { get; init; }
+    public long? LastGpsAgoSeconds { get; init; }
     public double MonthKm { get; init; }
+    public long TodayPointsRaw { get; init; }
+    public long TodayPointsOptimized { get; init; }
+    public long TodayHeartbeatPoints { get; init; }
+    public double TodayKmRaw { get; init; }
+    public double TodayKmOptimized { get; init; }
+    public long MonthPointsRaw { get; init; }
+    public long MonthPointsOptimized { get; init; }
+    public long MonthHeartbeatPoints { get; init; }
+    public double MonthKmRaw { get; init; }
+    public double MonthKmOptimized { get; init; }
 }
 
 public sealed class ServiceStatusDto

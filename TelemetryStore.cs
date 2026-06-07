@@ -97,6 +97,8 @@ public sealed class TelemetryStore : IDisposable
 
         var receivedAtUtc = DateTime.UtcNow;
         var gpsTimeUtc = AppTime.AsUtc(location.TimestampUtc);
+        if ((receivedAtUtc - gpsTimeUtc).TotalMinutes > 10)
+            gpsTimeUtc = receivedAtUtc;
         var discardCoordinates = location.Accuracy.HasValue && location.Accuracy.Value > OwnTracksNoCoordinatesAccuracyM;
         double? latitude = discardCoordinates ? null : location.Latitude;
         double? longitude = discardCoordinates ? null : location.Longitude;
@@ -506,6 +508,194 @@ public sealed class TelemetryStore : IDisposable
         }
     }
 
+    public IReadOnlyList<string> GetDeviceIdsWithTelemetry()
+    {
+        lock (_lock)
+        {
+            using var connection = OpenConnection();
+            using var command = connection.CreateCommand();
+            command.CommandText = """
+                SELECT DISTINCT device_id
+                FROM telemetry_points
+                ORDER BY device_id;
+                """;
+
+            using var reader = command.ExecuteReader();
+            var deviceIds = new List<string>();
+
+            while (reader.Read())
+                deviceIds.Add(reader.GetString(0));
+
+            return deviceIds;
+        }
+    }
+
+    public IReadOnlyList<TelemetryPoint> GetRawTelemetryAfter(
+        string deviceId,
+        long? afterRawId,
+        DateTime? toUtc = null,
+        int limit = 10000,
+        DateTime? fromUtcMin = null)
+    {
+        var normalizedId = DeviceRegistry.NormalizeId(deviceId);
+        if (string.IsNullOrEmpty(normalizedId))
+            return Array.Empty<TelemetryPoint>();
+
+        if (limit <= 0)
+            limit = 10000;
+
+        lock (_lock)
+        {
+            using var connection = OpenConnection();
+            using var command = connection.CreateCommand();
+
+            var filters = new List<string>
+            {
+                "device_id = $device_id",
+                "latitude IS NOT NULL",
+                "longitude IS NOT NULL"
+            };
+            command.Parameters.AddWithValue("$device_id", normalizedId);
+            command.Parameters.AddWithValue("$limit", limit);
+
+            if (afterRawId.HasValue)
+            {
+                filters.Add("id > $after_raw_id");
+                command.Parameters.AddWithValue("$after_raw_id", afterRawId.Value);
+            }
+
+            if (toUtc.HasValue)
+            {
+                filters.Add("gps_time_utc <= $to_utc");
+                command.Parameters.AddWithValue("$to_utc", FormatUtc(toUtc.Value));
+            }
+
+            if (fromUtcMin.HasValue)
+            {
+                filters.Add("gps_time_utc >= $from_utc_min");
+                command.Parameters.AddWithValue("$from_utc_min", FormatUtc(fromUtcMin.Value));
+            }
+
+            command.CommandText = $"""
+                SELECT
+                    id,
+                    device_id,
+                    device_name,
+                    latitude,
+                    longitude,
+                    altitude,
+                    speed_kmh,
+                    direction,
+                    gps_time_utc,
+                    received_at_utc,
+                    accuracy,
+                    geofence_names
+                FROM telemetry_points
+                WHERE {string.Join(" AND ", filters)}
+                ORDER BY gps_time_utc ASC, id ASC
+                LIMIT $limit;
+                """;
+
+            using var reader = command.ExecuteReader();
+            var points = new List<TelemetryPoint>();
+
+            while (reader.Read())
+            {
+                points.Add(new TelemetryPoint
+                {
+                    Id = reader.GetInt64(0),
+                    DeviceId = reader.GetString(1),
+                    DeviceName = reader.IsDBNull(2) ? null : reader.GetString(2),
+                    Latitude = reader.IsDBNull(3) ? null : reader.GetDouble(3),
+                    Longitude = reader.IsDBNull(4) ? null : reader.GetDouble(4),
+                    Altitude = reader.GetInt32(5),
+                    SpeedKmh = reader.GetDouble(6),
+                    Direction = reader.GetInt32(7),
+                    GpsTimeUtc = ParseUtc(reader.GetString(8)),
+                    ReceivedAtUtc = ParseUtc(reader.GetString(9)),
+                    Accuracy = reader.IsDBNull(10) ? null : reader.GetDouble(10),
+                    Geofences = GeofenceStore.DeserializeNames(reader.IsDBNull(11) ? null : reader.GetString(11))
+                });
+            }
+
+            return points;
+        }
+    }
+
+    public IReadOnlyList<TelemetryPoint> GetRawTelemetryInRangeBeforeId(
+        string deviceId,
+        DateTime fromUtc,
+        DateTime toUtc,
+        long beforeRawId,
+        int limit = 10000)
+    {
+        var normalizedId = DeviceRegistry.NormalizeId(deviceId);
+        if (string.IsNullOrEmpty(normalizedId))
+            return Array.Empty<TelemetryPoint>();
+
+        if (limit <= 0)
+            limit = 10000;
+
+        lock (_lock)
+        {
+            using var connection = OpenConnection();
+            using var command = connection.CreateCommand();
+            command.CommandText = """
+                SELECT
+                    id,
+                    device_id,
+                    device_name,
+                    latitude,
+                    longitude,
+                    altitude,
+                    speed_kmh,
+                    direction,
+                    gps_time_utc,
+                    received_at_utc,
+                    accuracy,
+                    geofence_names
+                FROM telemetry_points
+                WHERE device_id = $device_id
+                  AND latitude IS NOT NULL
+                  AND longitude IS NOT NULL
+                  AND gps_time_utc >= $from_utc
+                  AND gps_time_utc <= $to_utc
+                  AND id < $before_raw_id
+                ORDER BY gps_time_utc ASC, id ASC
+                LIMIT $limit;
+                """;
+            command.Parameters.AddWithValue("$device_id", normalizedId);
+            command.Parameters.AddWithValue("$from_utc", FormatUtc(fromUtc));
+            command.Parameters.AddWithValue("$to_utc", FormatUtc(toUtc));
+            command.Parameters.AddWithValue("$before_raw_id", beforeRawId);
+            command.Parameters.AddWithValue("$limit", limit);
+
+            using var reader = command.ExecuteReader();
+            var points = new List<TelemetryPoint>();
+
+            while (reader.Read())
+            {
+                points.Add(new TelemetryPoint
+                {
+                    Id = reader.GetInt64(0),
+                    DeviceId = reader.GetString(1),
+                    DeviceName = reader.IsDBNull(2) ? null : reader.GetString(2),
+                    Latitude = reader.IsDBNull(3) ? null : reader.GetDouble(3),
+                    Longitude = reader.IsDBNull(4) ? null : reader.GetDouble(4),
+                    Altitude = reader.GetInt32(5),
+                    SpeedKmh = reader.GetDouble(6),
+                    Direction = reader.GetInt32(7),
+                    GpsTimeUtc = ParseUtc(reader.GetString(8)),
+                    ReceivedAtUtc = ParseUtc(reader.GetString(9)),
+                    Accuracy = reader.IsDBNull(10) ? null : reader.GetDouble(10),
+                    Geofences = GeofenceStore.DeserializeNames(reader.IsDBNull(11) ? null : reader.GetString(11))
+                });
+            }
+
+            return points;
+        }
+    }
+
     public IReadOnlyList<TelemetryPoint> GetTrack(
         string deviceId,
         DateTime? fromUtc = null,
@@ -607,13 +797,23 @@ public sealed class TelemetryStore : IDisposable
         if (string.IsNullOrEmpty(normalizedId))
             return EmptyStats();
 
+        var nowLocal = AppTime.NowLocal();
+        var todayStartLocal = nowLocal.Date;
+        var monthStartLocal = new DateTime(nowLocal.Year, nowLocal.Month, 1);
+        var todayFromUtc = AppTime.LocalToUtc(todayStartLocal);
+        var todayToUtc = AppTime.LocalToUtc(nowLocal);
+        var monthFromUtc = AppTime.LocalToUtc(monthStartLocal);
+        var monthToUtc = todayToUtc;
+
         lock (_lock)
         {
             using var connection = OpenConnection();
 
             var pointsCount = QueryPointsCount(connection, normalizedId);
             var lastReceivedUtc = QueryLastReceivedUtc(connection, normalizedId);
-            var monthKm = QueryMonthDistanceKm(connection, normalizedId);
+            var lastGpsUtc = QueryLastGpsUtc(connection, normalizedId);
+            var todayStats = QueryPeriodStats(connection, normalizedId, todayFromUtc, todayToUtc);
+            var monthStats = QueryPeriodStats(connection, normalizedId, monthFromUtc, monthToUtc);
 
             return new DeviceTelemetryStats
             {
@@ -621,8 +821,28 @@ public sealed class TelemetryStore : IDisposable
                 LastTelemetryAgoSeconds = lastReceivedUtc.HasValue
                     ? (long)Math.Max(0, (DateTime.UtcNow - lastReceivedUtc.Value).TotalSeconds)
                     : null,
-                MonthKm = monthKm
+                LastGpsAgoSeconds = lastGpsUtc.HasValue
+                    ? (long)Math.Max(0, (DateTime.UtcNow - lastGpsUtc.Value).TotalSeconds)
+                    : null,
+                MonthKm = monthStats.DistanceKm,
+                TodayPointsRaw = todayStats.PointsCount,
+                TodayKmRaw = todayStats.DistanceKm,
+                MonthPointsRaw = monthStats.PointsCount,
+                MonthKmRaw = monthStats.DistanceKm
             };
+        }
+    }
+
+    public PeriodTrackStats GetPeriodStats(string deviceId, DateTime fromUtc, DateTime toUtc)
+    {
+        var normalizedId = DeviceRegistry.NormalizeId(deviceId);
+        if (string.IsNullOrEmpty(normalizedId))
+            return EmptyPeriodStats();
+
+        lock (_lock)
+        {
+            using var connection = OpenConnection();
+            return QueryPeriodStats(connection, normalizedId, fromUtc, toUtc);
         }
     }
 
@@ -631,8 +851,81 @@ public sealed class TelemetryStore : IDisposable
         {
             PointsCount = 0,
             LastTelemetryAgoSeconds = null,
-            MonthKm = 0
+            MonthKm = 0,
+            TodayPointsRaw = 0,
+            TodayKmRaw = 0,
+            MonthPointsRaw = 0,
+            MonthKmRaw = 0
         };
+
+    private static PeriodTrackStats EmptyPeriodStats() =>
+        new()
+        {
+            PointsCount = 0,
+            HeartbeatPointsCount = 0,
+            DistanceKm = 0
+        };
+
+    private static PeriodTrackStats QueryPeriodStats(
+        SqliteConnection connection,
+        string deviceId,
+        DateTime fromUtc,
+        DateTime toUtc)
+    {
+        using var countCommand = connection.CreateCommand();
+        countCommand.CommandText = """
+            SELECT COUNT(*)
+            FROM telemetry_points
+            WHERE device_id = $device_id
+              AND gps_time_utc >= $from_utc
+              AND gps_time_utc <= $to_utc
+              AND latitude IS NOT NULL
+              AND longitude IS NOT NULL;
+            """;
+        countCommand.Parameters.AddWithValue("$device_id", deviceId);
+        countCommand.Parameters.AddWithValue("$from_utc", FormatUtc(fromUtc));
+        countCommand.Parameters.AddWithValue("$to_utc", FormatUtc(toUtc));
+        var pointsCount = (long)(countCommand.ExecuteScalar() ?? 0L);
+
+        using var distanceCommand = connection.CreateCommand();
+        distanceCommand.CommandText = """
+            SELECT latitude, longitude
+            FROM telemetry_points
+            WHERE device_id = $device_id
+              AND gps_time_utc >= $from_utc
+              AND gps_time_utc <= $to_utc
+              AND latitude IS NOT NULL
+              AND longitude IS NOT NULL
+            ORDER BY gps_time_utc ASC, id ASC;
+            """;
+        distanceCommand.Parameters.AddWithValue("$device_id", deviceId);
+        distanceCommand.Parameters.AddWithValue("$from_utc", FormatUtc(fromUtc));
+        distanceCommand.Parameters.AddWithValue("$to_utc", FormatUtc(toUtc));
+
+        using var reader = distanceCommand.ExecuteReader();
+
+        double? previousLat = null;
+        double? previousLon = null;
+        var totalKm = 0.0;
+
+        while (reader.Read())
+        {
+            var lat = reader.GetDouble(0);
+            var lon = reader.GetDouble(1);
+
+            if (previousLat.HasValue && previousLon.HasValue)
+                totalKm += GeoDistance.HaversineKm(previousLat.Value, previousLon.Value, lat, lon);
+
+            previousLat = lat;
+            previousLon = lon;
+        }
+
+        return new PeriodTrackStats
+        {
+            PointsCount = pointsCount,
+            DistanceKm = totalKm
+        };
+    }
 
     private static long QueryPointsCount(SqliteConnection connection, string deviceId)
     {
@@ -651,6 +944,22 @@ public sealed class TelemetryStore : IDisposable
         using var command = connection.CreateCommand();
         command.CommandText = """
             SELECT MAX(received_at_utc)
+            FROM telemetry_points
+            WHERE device_id = $device_id;
+            """;
+        command.Parameters.AddWithValue("$device_id", deviceId);
+        var value = command.ExecuteScalar();
+        if (value == null || value is DBNull)
+            return null;
+
+        return ParseUtc(Convert.ToString(value, CultureInfo.InvariantCulture)!);
+    }
+
+    private static DateTime? QueryLastGpsUtc(SqliteConnection connection, string deviceId)
+    {
+        using var command = connection.CreateCommand();
+        command.CommandText = """
+            SELECT MAX(gps_time_utc)
             FROM telemetry_points
             WHERE device_id = $device_id;
             """;
