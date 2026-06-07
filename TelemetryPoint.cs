@@ -12,4 +12,5 @@ public sealed class TelemetryPoint
     public int Direction { get; init; }
     public DateTime GpsTimeUtc { get; init; }
     public DateTime ReceivedAtUtc { get; init; }
+    public IReadOnlyList<string> Geofences { get; init; } = Array.Empty<string>();
 }

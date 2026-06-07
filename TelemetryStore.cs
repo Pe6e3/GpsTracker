@@ -1,6 +1,7 @@
 using System.Globalization;
 using GpsTcpProxy.Models;
 using GpsTcpProxy.Protocol;
+using GpsTcpProxy.Services;
 using Microsoft.Data.Sqlite;
 
 namespace GpsTcpProxy;
@@ -9,10 +10,12 @@ public sealed class TelemetryStore : IDisposable
 {
     private readonly string _connectionString;
     private readonly string _databaseFullPath;
+    private readonly GeofenceService? _geofenceService;
     private readonly object _lock = new();
 
-    public TelemetryStore(string databasePath)
+    public TelemetryStore(string databasePath, GeofenceService? geofenceService = null)
     {
+        _geofenceService = geofenceService;
         _databaseFullPath = Path.IsPathRooted(databasePath)
             ? databasePath
             : Path.Combine(AppContext.BaseDirectory, databasePath);
@@ -59,7 +62,16 @@ public sealed class TelemetryStore : IDisposable
             EnsureColumn(connection, "accuracy", "REAL");
             EnsureColumn(connection, "battery", "INTEGER");
             EnsureColumn(connection, "source_topic", "TEXT");
+            EnsureColumn(connection, "geofence_names", "TEXT");
         }
+    }
+
+    private string ResolveGeofenceNamesJson(string deviceId, double latitude, double longitude)
+    {
+        if (_geofenceService == null)
+            return GeofenceStore.SerializeNames(Array.Empty<string>());
+
+        return _geofenceService.ProcessNewPoint(deviceId, latitude, longitude).GeofenceNamesJson;
     }
 
     public void SaveOwnTracksLocation(string deviceId, OwnTracksLocationMessage location)
@@ -77,6 +89,7 @@ public sealed class TelemetryStore : IDisposable
 
         var receivedAtUtc = DateTime.UtcNow;
         var gpsTimeUtc = AppTime.AsUtc(location.TimestampUtc);
+        var geofenceNamesJson = ResolveGeofenceNamesJson(normalizedId, location.Latitude, location.Longitude);
 
         lock (_lock)
         {
@@ -98,7 +111,8 @@ public sealed class TelemetryStore : IDisposable
                     status_flags,
                     accuracy,
                     battery,
-                    source_topic
+                    source_topic,
+                    geofence_names
                 ) VALUES (
                     $device_id,
                     $device_name,
@@ -114,7 +128,8 @@ public sealed class TelemetryStore : IDisposable
                     $status_flags,
                     $accuracy,
                     $battery,
-                    $source_topic
+                    $source_topic,
+                    $geofence_names
                 );
                 """;
             command.Parameters.AddWithValue("$device_id", normalizedId);
@@ -132,6 +147,7 @@ public sealed class TelemetryStore : IDisposable
             command.Parameters.AddWithValue("$accuracy", (object?)location.Accuracy ?? DBNull.Value);
             command.Parameters.AddWithValue("$battery", (object?)location.Battery ?? DBNull.Value);
             command.Parameters.AddWithValue("$source_topic", location.Topic);
+            command.Parameters.AddWithValue("$geofence_names", geofenceNamesJson);
             command.ExecuteNonQuery();
         }
     }
@@ -174,6 +190,7 @@ public sealed class TelemetryStore : IDisposable
             deviceName = null;
 
         var receivedAtUtc = DateTime.UtcNow;
+        var geofenceNamesJson = ResolveGeofenceNamesJson(deviceId, location.Latitude, location.Longitude);
 
         lock (_lock)
         {
@@ -192,7 +209,8 @@ public sealed class TelemetryStore : IDisposable
                     received_at_utc,
                     message_serial,
                     alarm_flags,
-                    status_flags
+                    status_flags,
+                    geofence_names
                 ) VALUES (
                     $device_id,
                     $device_name,
@@ -205,7 +223,8 @@ public sealed class TelemetryStore : IDisposable
                     $received_at_utc,
                     $message_serial,
                     $alarm_flags,
-                    $status_flags
+                    $status_flags,
+                    $geofence_names
                 );
                 """;
             command.Parameters.AddWithValue("$device_id", deviceId);
@@ -220,6 +239,7 @@ public sealed class TelemetryStore : IDisposable
             command.Parameters.AddWithValue("$message_serial", message.Serial);
             command.Parameters.AddWithValue("$alarm_flags", location.AlarmFlags);
             command.Parameters.AddWithValue("$status_flags", location.StatusFlags);
+            command.Parameters.AddWithValue("$geofence_names", geofenceNamesJson);
             command.ExecuteNonQuery();
         }
     }
@@ -243,6 +263,7 @@ public sealed class TelemetryStore : IDisposable
 
         var receivedAtUtc = DateTime.UtcNow;
         var gpsTimeUtc = AppTime.AsUtc(location.DeviceTimeUtc);
+        var geofenceNamesJson = ResolveGeofenceNamesJson(deviceId, location.Latitude, location.Longitude);
 
         lock (_lock)
         {
@@ -261,7 +282,8 @@ public sealed class TelemetryStore : IDisposable
                     received_at_utc,
                     message_serial,
                     alarm_flags,
-                    status_flags
+                    status_flags,
+                    geofence_names
                 ) VALUES (
                     $device_id,
                     $device_name,
@@ -274,7 +296,8 @@ public sealed class TelemetryStore : IDisposable
                     $received_at_utc,
                     $message_serial,
                     $alarm_flags,
-                    $status_flags
+                    $status_flags,
+                    $geofence_names
                 );
                 """;
             command.Parameters.AddWithValue("$device_id", deviceId);
@@ -289,6 +312,7 @@ public sealed class TelemetryStore : IDisposable
             command.Parameters.AddWithValue("$message_serial", message.Serial);
             command.Parameters.AddWithValue("$alarm_flags", 0);
             command.Parameters.AddWithValue("$status_flags", 0);
+            command.Parameters.AddWithValue("$geofence_names", geofenceNamesJson);
             command.ExecuteNonQuery();
         }
     }
@@ -338,7 +362,8 @@ public sealed class TelemetryStore : IDisposable
                     speed_kmh,
                     direction,
                     gps_time_utc,
-                    received_at_utc
+                    received_at_utc,
+                    geofence_names
                 FROM telemetry_points
                 WHERE {string.Join(" AND ", filters)}
                 ORDER BY gps_time_utc ASC, id ASC
@@ -361,7 +386,8 @@ public sealed class TelemetryStore : IDisposable
                     SpeedKmh = reader.GetDouble(6),
                     Direction = reader.GetInt32(7),
                     GpsTimeUtc = ParseUtc(reader.GetString(8)),
-                    ReceivedAtUtc = ParseUtc(reader.GetString(9))
+                    ReceivedAtUtc = ParseUtc(reader.GetString(9)),
+                    Geofences = GeofenceStore.DeserializeNames(reader.IsDBNull(10) ? null : reader.GetString(10))
                 });
             }
 

@@ -23,9 +23,16 @@ builder.WebHost.UseUrls($"http://0.0.0.0:{settings.ApiPort}");
 
 builder.Services.AddSingleton(settings);
 builder.Services.AddSingleton(settings.Mqtt);
-builder.Services.AddSingleton<TelemetryStore>(_ =>
+builder.Services.AddSingleton(sp =>
 {
-    var store = new TelemetryStore(settings.DatabasePath);
+    var geofenceStore = new GeofenceStore(settings.DatabasePath);
+    geofenceStore.Initialize();
+    return geofenceStore;
+});
+builder.Services.AddSingleton<GeofenceService>();
+builder.Services.AddSingleton<TelemetryStore>(sp =>
+{
+    var store = new TelemetryStore(settings.DatabasePath, sp.GetRequiredService<GeofenceService>());
     store.Initialize();
     return store;
 });
