@@ -10,6 +10,7 @@ public sealed class DeviceStatusDto
 {
     public required string Id { get; init; }
     public required string Name { get; init; }
+    public required string Protocol { get; init; }
     public long PointsCount { get; init; }
     public long? LastTelemetryAgoSeconds { get; init; }
     public double MonthKm { get; init; }

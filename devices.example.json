@@ -6,5 +6,9 @@
   "352672108487612": {
     "name": "Копейка",
     "protocol": "GT06"
+  },
+  "phone": {
+    "name": "📱 Телефон",
+    "protocol": "OwnTracks"
   }
 }

@@ -38,6 +38,7 @@ public sealed class ServiceStatusService
         {
             Id = device.Id,
             Name = device.Name,
+            Protocol = device.Protocol,
             PointsCount = stats.PointsCount,
             LastTelemetryAgoSeconds = stats.LastTelemetryAgoSeconds,
             MonthKm = Math.Round(stats.MonthKm, 2)

@@ -3,7 +3,8 @@ namespace GpsTcpProxy.Models;
 public enum DeviceProtocol
 {
     Jt808,
-    Gt06
+    Gt06,
+    OwnTracks
 }
 
 public static class DeviceProtocolParser
@@ -26,6 +27,11 @@ public static class DeviceProtocolParser
             case "GT06M":
                 protocol = DeviceProtocol.Gt06;
                 return true;
+            case "OWNTRACKS":
+            case "OWNTRACKS/MQTT":
+            case "MQTT":
+                protocol = DeviceProtocol.OwnTracks;
+                return true;
             default:
                 return false;
         }
@@ -35,6 +41,7 @@ public static class DeviceProtocolParser
         protocol switch
         {
             DeviceProtocol.Gt06 => "GT06",
+            DeviceProtocol.OwnTracks => "OwnTracks",
             _ => "JT/T808"
         };
 }

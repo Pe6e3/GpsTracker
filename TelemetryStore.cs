@@ -1,4 +1,5 @@
 using System.Globalization;
+using GpsTcpProxy.Models;
 using GpsTcpProxy.Protocol;
 using Microsoft.Data.Sqlite;
 
@@ -54,7 +55,102 @@ public sealed class TelemetryStore : IDisposable
                     ON telemetry_points(device_id, gps_time_utc);
                 """;
             command.ExecuteNonQuery();
+
+            EnsureColumn(connection, "accuracy", "REAL");
+            EnsureColumn(connection, "battery", "INTEGER");
+            EnsureColumn(connection, "source_topic", "TEXT");
         }
+    }
+
+    public void SaveOwnTracksLocation(string deviceId, OwnTracksLocationMessage location)
+    {
+        if (string.IsNullOrWhiteSpace(deviceId))
+            return;
+
+        var normalizedId = DeviceRegistry.NormalizeId(deviceId);
+        if (string.IsNullOrEmpty(normalizedId))
+            normalizedId = deviceId.Trim();
+
+        var deviceName = DeviceRegistry.GetDisplayName(normalizedId);
+        if (deviceName == normalizedId || deviceName == "?")
+            deviceName = null;
+
+        var receivedAtUtc = DateTime.UtcNow;
+        var gpsTimeUtc = AppTime.AsUtc(location.TimestampUtc);
+
+        lock (_lock)
+        {
+            using var connection = OpenConnection();
+            using var command = connection.CreateCommand();
+            command.CommandText = """
+                INSERT INTO telemetry_points (
+                    device_id,
+                    device_name,
+                    latitude,
+                    longitude,
+                    altitude,
+                    speed_kmh,
+                    direction,
+                    gps_time_utc,
+                    received_at_utc,
+                    message_serial,
+                    alarm_flags,
+                    status_flags,
+                    accuracy,
+                    battery,
+                    source_topic
+                ) VALUES (
+                    $device_id,
+                    $device_name,
+                    $latitude,
+                    $longitude,
+                    $altitude,
+                    $speed_kmh,
+                    $direction,
+                    $gps_time_utc,
+                    $received_at_utc,
+                    $message_serial,
+                    $alarm_flags,
+                    $status_flags,
+                    $accuracy,
+                    $battery,
+                    $source_topic
+                );
+                """;
+            command.Parameters.AddWithValue("$device_id", normalizedId);
+            command.Parameters.AddWithValue("$device_name", (object?)deviceName ?? DBNull.Value);
+            command.Parameters.AddWithValue("$latitude", location.Latitude);
+            command.Parameters.AddWithValue("$longitude", location.Longitude);
+            command.Parameters.AddWithValue("$altitude", location.Altitude ?? 0);
+            command.Parameters.AddWithValue("$speed_kmh", location.VelocityKmh ?? 0);
+            command.Parameters.AddWithValue("$direction", location.Course ?? 0);
+            command.Parameters.AddWithValue("$gps_time_utc", FormatUtc(gpsTimeUtc));
+            command.Parameters.AddWithValue("$received_at_utc", FormatUtc(receivedAtUtc));
+            command.Parameters.AddWithValue("$message_serial", 0);
+            command.Parameters.AddWithValue("$alarm_flags", 0);
+            command.Parameters.AddWithValue("$status_flags", 0);
+            command.Parameters.AddWithValue("$accuracy", (object?)location.Accuracy ?? DBNull.Value);
+            command.Parameters.AddWithValue("$battery", (object?)location.Battery ?? DBNull.Value);
+            command.Parameters.AddWithValue("$source_topic", location.Topic);
+            command.ExecuteNonQuery();
+        }
+    }
+
+    private static void EnsureColumn(SqliteConnection connection, string columnName, string columnType)
+    {
+        using var info = connection.CreateCommand();
+        info.CommandText = "PRAGMA table_info(telemetry_points);";
+
+        using var reader = info.ExecuteReader();
+        while (reader.Read())
+        {
+            if (string.Equals(reader.GetString(1), columnName, StringComparison.OrdinalIgnoreCase))
+                return;
+        }
+
+        using var alter = connection.CreateCommand();
+        alter.CommandText = $"ALTER TABLE telemetry_points ADD COLUMN {columnName} {columnType};";
+        alter.ExecuteNonQuery();
     }
 
     public void SaveLocation(Jt808Message message)

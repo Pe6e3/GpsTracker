@@ -22,6 +22,7 @@ builder.Logging.AddFilter("Microsoft.Hosting.Lifetime", LogLevel.Warning);
 builder.WebHost.UseUrls($"http://0.0.0.0:{settings.ApiPort}");
 
 builder.Services.AddSingleton(settings);
+builder.Services.AddSingleton(settings.Mqtt);
 builder.Services.AddSingleton<TelemetryStore>(_ =>
 {
     var store = new TelemetryStore(settings.DatabasePath);
@@ -32,8 +33,11 @@ builder.Services.AddSingleton<ConnectionManager>();
 builder.Services.AddSingleton<AuthService>();
 builder.Services.AddSingleton<TrackQueryService>();
 builder.Services.AddSingleton<ServiceStatusService>();
+builder.Services.AddSingleton<OwnTracksDeviceHandler>();
+builder.Services.AddSingleton<MqttService>();
 builder.Services.AddHostedService<TcpProxyHostedService>();
 builder.Services.AddHostedService<LogRotationHostedService>();
+builder.Services.AddHostedService<MqttHostedService>();
 
 builder.Services.AddControllers();
 builder.Services.AddAuthentication(JwtBearerDefaults.AuthenticationScheme)
@@ -61,6 +65,10 @@ app.MapControllers();
 TrafficLogger.LogInfo($"GpsTcpProxy v{AppVersion.Version}");
 TrafficLogger.LogInfo($"HTTP API: http://0.0.0.0:{settings.ApiPort}");
 TrafficLogger.LogInfo($"JT/T808 GPS: порт {settings.ListenPort} (режим: {(settings.ProxyMode ? "proxy" : "server")})");
+if (settings.Mqtt.Enabled)
+    TrafficLogger.LogInfo($"MQTT OwnTracks: {settings.Mqtt.Host}:{settings.Mqtt.Port}, topic {settings.Mqtt.Topic}");
+else
+    TrafficLogger.LogInfo("MQTT OwnTracks: disabled");
 
 try
 {

@@ -1,4 +1,5 @@
 using System.Text.Json;
+using GpsTcpProxy.Models;
 
 namespace GpsTcpProxy;
 
@@ -20,6 +21,7 @@ public sealed class ProxySettings
     public string JwtIssuer { get; set; } = "GpsTcpProxy";
     public string JwtAudience { get; set; } = "GpsTcpProxyClient";
     public int JwtExpireHours { get; set; } = 24;
+    public MqttSettings Mqtt { get; set; } = new();
 
     public static ProxySettings Load(string path)
     {
