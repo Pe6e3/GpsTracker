@@ -6,8 +6,15 @@ namespace GpsTcpProxy.Services;
 
 public sealed class OwnTracksDeviceHandler
 {
+    private sealed class LocationWaiter
+    {
+        public required TaskCompletionSource<OwnTracksLocationMessage> Completion { get; init; }
+        public required DateTime SinceUtc { get; init; }
+    }
+
     private readonly TelemetryStore _telemetryStore;
     private readonly ConcurrentDictionary<string, OwnTracksTopicInfo> _topics = new(StringComparer.OrdinalIgnoreCase);
+    private readonly ConcurrentDictionary<string, LocationWaiter> _locationWaiters = new(StringComparer.OrdinalIgnoreCase);
 
     public OwnTracksDeviceHandler(TelemetryStore telemetryStore)
     {
@@ -44,6 +51,49 @@ public sealed class OwnTracksDeviceHandler
         _topics.TryGetValue(DeviceRegistry.NormalizeId(deviceId), out topicInfo!) ||
         _topics.TryGetValue(deviceId, out topicInfo!);
 
+    public async Task<OwnTracksLocationMessage?> WaitForLocationAsync(
+        string deviceId,
+        DateTime sinceUtc,
+        TimeSpan timeout,
+        CancellationToken cancellationToken = default)
+    {
+        var normalizedId = DeviceRegistry.NormalizeId(deviceId);
+        if (string.IsNullOrEmpty(normalizedId))
+            normalizedId = deviceId;
+
+        var waiter = new LocationWaiter
+        {
+            Completion = new TaskCompletionSource<OwnTracksLocationMessage>(TaskCreationOptions.RunContinuationsAsynchronously),
+            SinceUtc = sinceUtc,
+        };
+
+        _locationWaiters.AddOrUpdate(
+            normalizedId,
+            waiter,
+            (_, previous) =>
+            {
+                previous.Completion.TrySetCanceled();
+                return waiter;
+            });
+
+        using var timeoutCts = CancellationTokenSource.CreateLinkedTokenSource(cancellationToken);
+        timeoutCts.CancelAfter(timeout);
+
+        try
+        {
+            return await waiter.Completion.Task.WaitAsync(timeoutCts.Token);
+        }
+        catch (OperationCanceledException) when (!cancellationToken.IsCancellationRequested)
+        {
+            _locationWaiters.TryRemove(normalizedId, out _);
+            return null;
+        }
+        finally
+        {
+            _locationWaiters.TryRemove(normalizedId, out _);
+        }
+    }
+
     public void RegisterTopic(string deviceId, string? mqttUser, string topic)
     {
         if (string.IsNullOrWhiteSpace(deviceId) || string.IsNullOrWhiteSpace(topic))
@@ -78,6 +128,8 @@ public sealed class OwnTracksDeviceHandler
             MqttLogger.LogInfo($"location ignored: device {deviceId} is not registered");
             return;
         }
+
+        NotifyLocationWaiters(deviceId, location);
 
         try
         {
@@ -115,6 +167,18 @@ public sealed class OwnTracksDeviceHandler
 
         var deviceName = DeviceRegistry.GetDisplayName(deviceId);
         MqttLogger.LogInfo($"status {deviceName}: batt={status.Battery}% topic={status.Topic}");
+    }
+
+    private void NotifyLocationWaiters(string deviceId, OwnTracksLocationMessage location)
+    {
+        if (!_locationWaiters.TryGetValue(deviceId, out var waiter))
+            return;
+
+        if (location.TimestampUtc < waiter.SinceUtc.AddSeconds(-5))
+            return;
+
+        if (_locationWaiters.TryRemove(deviceId, out waiter))
+            waiter.Completion.TrySetResult(location);
     }
 
     private static bool ShouldAcceptDevice(string deviceId)

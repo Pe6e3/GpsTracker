@@ -9,7 +9,7 @@ public sealed class TelegramService
 {
     private static readonly HttpClient HttpClient = new()
     {
-        Timeout = TimeSpan.FromSeconds(15)
+        Timeout = TimeSpan.FromSeconds(35)
     };
 
     private readonly TelegramSettings _settings;
@@ -111,7 +111,11 @@ public sealed class TelegramService
             var body = await response.Content.ReadAsStringAsync(cancellationToken);
             TelegramLogger.LogError($"send failed ({(int)response.StatusCode}): {body}");
         }
-        catch (Exception ex) when (ex is not OperationCanceledException)
+        catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested)
+        {
+            throw;
+        }
+        catch (Exception ex)
         {
             TelegramLogger.LogError($"send failed: {ex.Message}");
         }

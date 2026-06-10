@@ -9,6 +9,8 @@ namespace GpsTcpProxy.Services;
 
 public sealed partial class TelegramBotService
 {
+    private static readonly TimeSpan WakeupResponseTimeout = TimeSpan.FromSeconds(10);
+
     private static readonly HttpClient HttpClient = new()
     {
         Timeout = TimeSpan.FromSeconds(35)
@@ -145,21 +147,37 @@ public sealed partial class TelegramBotService
         }
 
         var mqttService = _serviceProvider.GetRequiredService<MqttService>();
+        OwnTracksLocationMessage? location;
         try
         {
-            await mqttService.RequestLocationAsync(phoneId, cancellationToken);
-            var label = DeviceRegistry.GetDisplayName(phoneId);
-            var deviceLabel = label == phoneId || label == "?" ? phoneId : $"{label} ({phoneId})";
-            var mapUrl = MapLinkBuilder.BuildDeviceUrl(_settings.MapBaseUrl, phoneId);
-            await _telegramService.SendRawAsync(
-                $"📲 wakeup → {deviceLabel}\n<a href=\"{HtmlEncode(mapUrl)}\">🖥️ {HtmlEncode(mapUrl)}</a>",
-                "HTML",
-                cancellationToken);
+            location = await mqttService.RequestLocationAndWaitAsync(
+                phoneId,
+                WakeupResponseTimeout,
+                CancellationToken.None);
         }
         catch (Exception ex)
         {
-            await _telegramService.SendRawAsync($"Не удалось отправить wakeup: {ex.Message}", cancellationToken);
+            await _telegramService.SendRawAsync(
+                $"Не удалось отправить wakeup: {ex.Message}",
+                cancellationToken: CancellationToken.None);
+            return;
         }
+
+        var label = DeviceRegistry.GetDisplayName(phoneId);
+        var deviceLabel = label == phoneId || label == "?" ? phoneId : $"{label} ({phoneId})";
+        if (location == null)
+        {
+            await _telegramService.SendRawAsync(
+                $"📲 wakeup → {deviceLabel}\nОтвет от телефона не пришёл за {(int)WakeupResponseTimeout.TotalSeconds} сек.",
+                cancellationToken: CancellationToken.None);
+            return;
+        }
+
+        var googleUrl = MapLinkBuilder.BuildGoogleMapsUrl(location.Latitude, location.Longitude);
+        await _telegramService.SendRawAsync(
+            $"📲 wakeup → {deviceLabel} <a href=\"{HtmlEncode(googleUrl)}\">🗺️</a>",
+            "HTML",
+            CancellationToken.None);
     }
 
     private async Task SendDeviceMapLinksAsync(CancellationToken cancellationToken)
@@ -185,14 +203,13 @@ public sealed partial class TelegramBotService
             var lat = point.Latitude.Value;
             var lon = point.Longitude.Value;
             var mapUrl = MapLinkBuilder.BuildDeviceUrl(_settings.MapBaseUrl, device.Id);
-            var yandexUrl =
-                $"https://yandex.ru/maps/?pt={lon.ToString("F5", CultureInfo.InvariantCulture)},{lat.ToString("F5", CultureInfo.InvariantCulture)}&z=16&l=map";
+            var googleUrl = MapLinkBuilder.BuildGoogleMapsUrl(lat, lon);
             var batterySuffix = point.Battery.HasValue ? $" {point.Battery.Value}%" : string.Empty;
 
             lines.Add(
                 $"• {HtmlEncode(label)} " +
                 $"<a href=\"{HtmlEncode(mapUrl)}\">🖥️</a>  " +
-                $"<a href=\"{HtmlEncode(yandexUrl)}\">🗺️</a>{batterySuffix}");
+                $"<a href=\"{HtmlEncode(googleUrl)}\">🗺️</a>{batterySuffix}");
         }
 
         await _telegramService.SendRawAsync(string.Join('\n', lines), "HTML", cancellationToken);

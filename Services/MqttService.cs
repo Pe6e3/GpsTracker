@@ -92,6 +92,17 @@ public sealed class MqttService : IAsyncDisposable
     public Task RequestLocationAsync(string deviceId, CancellationToken cancellationToken = default) =>
         SendCommandAsync(deviceId, OwnTracksParser.BuildReportLocationCommand(), cancellationToken);
 
+    public async Task<OwnTracksLocationMessage?> RequestLocationAndWaitAsync(
+        string deviceId,
+        TimeSpan timeout,
+        CancellationToken cancellationToken = default)
+    {
+        var sinceUtc = DateTime.UtcNow;
+        var waitTask = _deviceHandler.WaitForLocationAsync(deviceId, sinceUtc, timeout, cancellationToken);
+        await RequestLocationAsync(deviceId, cancellationToken);
+        return await waitTask;
+    }
+
     public async ValueTask DisposeAsync()
     {
         await StopAsync();
@@ -109,9 +120,12 @@ public sealed class MqttService : IAsyncDisposable
             var topic = e.ApplicationMessage.Topic ?? string.Empty;
             var payload = e.ApplicationMessage.PayloadSegment.AsMemory();
 
-            MqttLogger.LogInfo($"← {topic} ({payload.Length} bytes)");
-            if (_settings.LogPayload && payload.Length > 0)
-                MqttLogger.LogPayload(topic, payload);
+            if (!topic.EndsWith("/cmd", StringComparison.OrdinalIgnoreCase))
+            {
+                MqttLogger.LogInfo($"← {topic} ({payload.Length} bytes)");
+                if (_settings.LogPayload && payload.Length > 0)
+                    MqttLogger.LogPayload(topic, payload);
+            }
 
             _deviceHandler.HandleMessage(topic, payload);
 
