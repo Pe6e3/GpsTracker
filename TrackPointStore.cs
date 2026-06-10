@@ -87,6 +87,27 @@ public sealed class TrackPointStore : IDisposable
         }
     }
 
+    public void DeleteFromRawEndId(string deviceId, long minRawEndId)
+    {
+        var normalizedId = DeviceRegistry.NormalizeId(deviceId);
+        if (string.IsNullOrEmpty(normalizedId))
+            return;
+
+        lock (_lock)
+        {
+            using var connection = OpenConnection();
+            using var command = connection.CreateCommand();
+            command.CommandText = """
+                DELETE FROM track_points
+                WHERE device_id = $device_id
+                  AND COALESCE(raw_end_id, source_raw_telemetry_id) >= $min_raw_end_id;
+                """;
+            command.Parameters.AddWithValue("$device_id", normalizedId);
+            command.Parameters.AddWithValue("$min_raw_end_id", minRawEndId);
+            command.ExecuteNonQuery();
+        }
+    }
+
     public IReadOnlyList<ProcessedTrackPoint> GetPrecedingStationaryGroup(
         string deviceId,
         DateTime fromUtc,
@@ -96,7 +117,7 @@ public sealed class TrackPointStore : IDisposable
         if (string.IsNullOrEmpty(normalizedId))
             return Array.Empty<ProcessedTrackPoint>();
 
-        var groupStart = GetPrecedingStationaryStart(normalizedId, fromUtc);
+        var groupStart = GetPrecedingStationaryStart(normalizedId, firstPointUtc);
         if (groupStart == null)
             return Array.Empty<ProcessedTrackPoint>();
 
@@ -124,13 +145,13 @@ public sealed class TrackPointStore : IDisposable
                     raw_end_id
                 FROM track_points
                 WHERE device_id = $device_id
-                  AND id >= $from_id
+                  AND timestamp_utc >= $group_start_utc
                   AND timestamp_utc < $first_point_utc
                   AND point_type IN ($stationary_start, $heartbeat, $stationary_end)
                 ORDER BY timestamp_utc ASC, id ASC;
                 """;
             command.Parameters.AddWithValue("$device_id", normalizedId);
-            command.Parameters.AddWithValue("$from_id", groupStart.Id);
+            command.Parameters.AddWithValue("$group_start_utc", FormatUtc(groupStart.TimestampUtc));
             command.Parameters.AddWithValue("$first_point_utc", FormatUtc(firstPointUtc));
             command.Parameters.AddWithValue("$stationary_start", Models.TrackPointType.StationaryStart);
             command.Parameters.AddWithValue("$heartbeat", Models.TrackPointType.Heartbeat);
@@ -359,10 +380,12 @@ public sealed class TrackPointStore : IDisposable
                     RawEndId = nextEnd.RawEndId
                 };
 
+                var movementFollowsAfter = HasMovingPointAfter(connection, normalizedId, nextEnd.TimestampUtc);
                 var regenerated = TrackSegmentProcessor.CreateStationaryPointsFromBounds(
                     groupStart,
                     mergedEnd,
-                    settings);
+                    settings,
+                    movementFollowsAfter: movementFollowsAfter);
 
                 using var transaction = connection.BeginTransaction();
 
@@ -478,6 +501,23 @@ public sealed class TrackPointStore : IDisposable
 
         using var reader = command.ExecuteReader();
         return reader.Read() ? ReadPoint(reader) : null;
+    }
+
+    private static bool HasMovingPointAfter(SqliteConnection connection, string deviceId, DateTime afterUtc)
+    {
+        using var command = connection.CreateCommand();
+        command.CommandText = """
+            SELECT 1
+            FROM track_points
+            WHERE device_id = $device_id
+              AND point_type = $moving_type
+              AND timestamp_utc > $after_utc
+            LIMIT 1;
+            """;
+        command.Parameters.AddWithValue("$device_id", deviceId);
+        command.Parameters.AddWithValue("$moving_type", TrackPointType.Moving);
+        command.Parameters.AddWithValue("$after_utc", FormatUtc(afterUtc));
+        return command.ExecuteScalar() != null;
     }
 
     private static ProcessedTrackPoint? LoadGroupStart(SqliteConnection connection, string deviceId, DateTime endTimestampUtc)

@@ -696,6 +696,37 @@ public sealed class TelemetryStore : IDisposable
         }
     }
 
+    public long? GetFirstRawIdAtOrAfter(string deviceId, DateTime fromUtc)
+    {
+        var normalizedId = DeviceRegistry.NormalizeId(deviceId);
+        if (string.IsNullOrEmpty(normalizedId))
+            return null;
+
+        lock (_lock)
+        {
+            using var connection = OpenConnection();
+            using var command = connection.CreateCommand();
+            command.CommandText = """
+                SELECT id
+                FROM telemetry_points
+                WHERE device_id = $device_id
+                  AND latitude IS NOT NULL
+                  AND longitude IS NOT NULL
+                  AND gps_time_utc >= $from_utc
+                ORDER BY gps_time_utc ASC, id ASC
+                LIMIT 1;
+                """;
+            command.Parameters.AddWithValue("$device_id", normalizedId);
+            command.Parameters.AddWithValue("$from_utc", FormatUtc(fromUtc));
+
+            var value = command.ExecuteScalar();
+            if (value == null || value is DBNull)
+                return null;
+
+            return Convert.ToInt64(value, CultureInfo.InvariantCulture);
+        }
+    }
+
     public IReadOnlyList<TelemetryPoint> GetTrack(
         string deviceId,
         DateTime? fromUtc = null,
@@ -961,7 +992,9 @@ public sealed class TelemetryStore : IDisposable
         command.CommandText = """
             SELECT MAX(gps_time_utc)
             FROM telemetry_points
-            WHERE device_id = $device_id;
+            WHERE device_id = $device_id
+              AND latitude IS NOT NULL
+              AND longitude IS NOT NULL;
             """;
         command.Parameters.AddWithValue("$device_id", deviceId);
         var value = command.ExecuteScalar();

@@ -5,6 +5,8 @@ namespace GpsTcpProxy.Services;
 
 public sealed class TrackQueryService
 {
+    private const int MaxTrackPoints = 10000;
+
     private readonly TelemetryStore _telemetryStore;
     private readonly TrackPointStore _trackPointStore;
     private readonly TrackProcessingSettings _trackProcessingSettings;
@@ -40,7 +42,9 @@ public sealed class TrackQueryService
             {
                 DeviceId = normalizedId,
                 DeviceName = deviceName,
-                Points = rawTrack.Select(MapRawPoint).ToArray()
+                Points = ApplyDisplaySpeedCorrection(
+                    FilterDisplayPoints(rawTrack.Select(MapRawPoint)),
+                    normalizedId)
             };
         }
 
@@ -49,7 +53,12 @@ public sealed class TrackQueryService
             normalizedId,
             fromUtc);
         var lastProcessedRawId = _trackPointStore.GetLastProcessedRawId(normalizedId);
-        var freshRawPoints = _telemetryStore.GetRawTelemetryAfter(normalizedId, lastProcessedRawId, toUtc);
+        var freshRawPoints = _telemetryStore.GetRawTelemetryAfter(
+            normalizedId,
+            lastProcessedRawId,
+            toUtc,
+            limit: MaxTrackPoints,
+            fromUtcMin: fromUtc);
         var protocol = DeviceRegistry.GetProtocol(normalizedId);
         var filteredFreshRaw = TrackOutlierFilter.FilterForRuntime(
             freshRawPoints,
@@ -60,19 +69,115 @@ public sealed class TrackQueryService
             .Where(p => p.GpsTimeUtc >= fromUtc && p.GpsTimeUtc <= toUtc)
             .ToArray();
 
-        var merged = processedPoints
-            .Select(MapProcessedPoint)
-            .Concat(freshInRange.Select(MapFreshRawPoint))
-            .OrderBy(p => p.TimeUtc, StringComparer.Ordinal)
-            .ToArray();
+        var freshProcessed = ProcessFreshPointsForDisplay(
+            normalizedId,
+            freshInRange,
+            lastProcessedRawId,
+            fromUtc,
+            toUtc,
+            protocol);
+
+        var merged = MergeDisplayPoints(
+            processedPoints.Select(MapProcessedPoint),
+            freshProcessed.Select(MapProcessedPoint));
 
         return new TrackResponse
         {
             DeviceId = normalizedId,
             DeviceName = deviceName,
-            Points = merged
+            Points = ApplyDisplaySpeedCorrection(
+                FilterDisplayPoints(merged),
+                normalizedId)
         };
     }
+
+    private TrackPointDto[] ApplyDisplaySpeedCorrection(
+        TrackPointDto[] points,
+        string deviceId)
+    {
+        if (points.Length == 0)
+            return points;
+
+        var protocol = DeviceRegistry.GetProtocol(deviceId);
+        var corrected = new TrackPointDto[points.Length];
+
+        for (var index = 0; index < points.Length; index++)
+        {
+            var point = points[index];
+            var previous = index > 0 ? points[index - 1] : null;
+            var next = index < points.Length - 1 ? points[index + 1] : null;
+            var speed = TrackSpeedHelper.ResolveDisplaySpeedKmh(
+                previous,
+                point,
+                next,
+                protocol,
+                _trackProcessingSettings);
+
+            corrected[index] = speed == point.Speed
+                ? point
+                : new TrackPointDto
+                {
+                    Lat = point.Lat,
+                    Lon = point.Lon,
+                    Accuracy = point.Accuracy,
+                    Alt = point.Alt,
+                    Speed = speed,
+                    TimeUtc = point.TimeUtc,
+                    TimeLocal = point.TimeLocal,
+                    Geofences = point.Geofences,
+                    PointType = point.PointType
+                };
+        }
+
+        return corrected;
+    }
+
+    private static TrackPointDto[] MergeDisplayPoints(
+        IEnumerable<TrackPointDto> processed,
+        IEnumerable<TrackPointDto> fresh)
+    {
+        var list = processed.OrderBy(p => p.TimeUtc, StringComparer.Ordinal).ToList();
+
+        foreach (var point in fresh.OrderBy(p => p.TimeUtc, StringComparer.Ordinal))
+        {
+            if (point.PointType == TrackPointType.StationaryStart &&
+                list.Any(p => p.PointType == TrackPointType.StationaryStart && IsSamePlace(p, point)))
+                continue;
+
+            if (point.PointType == TrackPointType.StationaryEnd)
+            {
+                var existingEnd = list.LastOrDefault(p =>
+                    p.PointType == TrackPointType.StationaryEnd && IsSamePlace(p, point));
+
+                if (existingEnd != null)
+                {
+                    if (string.Compare(point.TimeUtc, existingEnd.TimeUtc, StringComparison.Ordinal) > 0)
+                        list.Remove(existingEnd);
+                    else
+                        continue;
+                }
+            }
+
+            list.Add(point);
+        }
+
+        return list
+            .OrderBy(p => p.TimeUtc, StringComparer.Ordinal)
+            .ToArray();
+    }
+
+    private static bool IsSamePlace(TrackPointDto left, TrackPointDto right)
+    {
+        if (left.Lat == null || left.Lon == null || right.Lat == null || right.Lon == null)
+            return false;
+
+        return GeoDistance.HaversineMeters(left.Lat.Value, left.Lon.Value, right.Lat.Value, right.Lon.Value) <= 100;
+    }
+
+    private static TrackPointDto[] FilterDisplayPoints(IEnumerable<TrackPointDto> points) =>
+        points
+            .Where(p => p.Lat.HasValue && p.Lon.HasValue)
+            .ToArray();
 
     private IReadOnlyList<ProcessedTrackPoint> IncludePrecedingStationaryGroup(
         IReadOnlyList<ProcessedTrackPoint> processedPoints,
@@ -93,7 +198,47 @@ public sealed class TrackQueryService
         if (precedingGroup.Count == 0)
             return processedPoints;
 
+        var maxLookbackHours = Math.Max(1, _trackProcessingSettings.MaxStationarySegmentHours);
+        var minAllowedStartUtc = fromUtc.AddHours(-maxLookbackHours);
+        if (precedingGroup[0].TimestampUtc < minAllowedStartUtc)
+            return processedPoints;
+
         return precedingGroup.Concat(processedPoints).ToArray();
+    }
+
+    private IReadOnlyList<ProcessedTrackPoint> ProcessFreshPointsForDisplay(
+        string normalizedId,
+        IReadOnlyList<TelemetryPoint> freshInRange,
+        long? lastProcessedRawId,
+        DateTime fromUtc,
+        DateTime toUtc,
+        DeviceProtocol protocol)
+    {
+        if (freshInRange.Count == 0)
+            return Array.Empty<ProcessedTrackPoint>();
+
+        var combined = TrackProcessor.BuildPointsWithContext(
+            _telemetryStore,
+            normalizedId,
+            freshInRange,
+            lastProcessedRawId,
+            _trackProcessingSettings,
+            out _);
+
+        var filtered = TrackOutlierFilter.FilterForRuntime(combined, _trackProcessingSettings, protocol);
+        if (filtered.Count == 0)
+            return Array.Empty<ProcessedTrackPoint>();
+
+        var result = TrackSegmentProcessor.Process(
+            normalizedId,
+            filtered,
+            _trackProcessingSettings,
+            "runtime",
+            DateTime.UtcNow);
+
+        return result.TrackPoints
+            .Where(p => p.TimestampUtc >= fromUtc && p.TimestampUtc <= toUtc)
+            .ToArray();
     }
 
     private static (DateTime FromLocal, DateTime ToLocal) ResolveRange(string? from, string? to)
@@ -135,23 +280,18 @@ public sealed class TrackQueryService
         throw new ArgumentException($"Неверный формат даты: {value}");
     }
 
-    private TrackPointDto MapProcessedPoint(ProcessedTrackPoint point)
-    {
-        var exposeCoordinates = HasTrackCoordinates(point.Latitude, point.Longitude, point.Accuracy);
-
-        return new TrackPointDto
+    private TrackPointDto MapProcessedPoint(ProcessedTrackPoint point) =>
+        new()
         {
-            Lat = exposeCoordinates ? point.Latitude : null,
-            Lon = exposeCoordinates ? point.Longitude : null,
+            Lat = point.Latitude,
+            Lon = point.Longitude,
             Alt = point.Altitude,
             Speed = point.SpeedKmh,
-            Direction = point.Course,
             Accuracy = point.Accuracy,
             TimeUtc = FormatDisplayTimeUtc(point.TimestampUtc),
             TimeLocal = FormatDisplayTimeLocal(point.TimestampUtc),
             PointType = point.PointType
         };
-    }
 
     private TrackPointDto MapFreshRawPoint(TelemetryPoint point)
     {
@@ -164,7 +304,6 @@ public sealed class TrackQueryService
             Lon = exposeCoordinates ? point.Longitude : null,
             Alt = point.Altitude,
             Speed = point.SpeedKmh,
-            Direction = point.Direction,
             Accuracy = point.Accuracy,
             TimeUtc = FormatDisplayTimeUtc(displayTimeUtc),
             TimeLocal = FormatDisplayTimeLocal(displayTimeUtc),
@@ -183,7 +322,6 @@ public sealed class TrackQueryService
             Lon = exposeCoordinates ? point.Longitude : null,
             Alt = point.Altitude,
             Speed = point.SpeedKmh,
-            Direction = point.Direction,
             Accuracy = point.Accuracy,
             TimeUtc = FormatDisplayTimeUtc(TrackTimeHelper.ResolveDisplayTimeUtc(point.GpsTimeUtc, point.ReceivedAtUtc)),
             TimeLocal = FormatDisplayTimeLocal(TrackTimeHelper.ResolveDisplayTimeUtc(point.GpsTimeUtc, point.ReceivedAtUtc)),

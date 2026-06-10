@@ -57,8 +57,7 @@ public sealed class TelegramService
 
         var deviceLabel = FormatDeviceLabel(deviceId, deviceName);
         var phoneLabel = FormatDeviceLabel(phoneDeviceId, phoneDeviceName);
-        var mapBaseUrl = _settings.MapBaseUrl.Trim().TrimEnd('/');
-        var mapUrl = $"{mapBaseUrl}/{Uri.EscapeDataString(deviceId)}";
+        var mapUrl = MapLinkBuilder.BuildDeviceUrl(_settings.MapBaseUrl, deviceId);
 
         var text =
             $"🚨 ВОЗМОЖНЫЙ УГОН\n" +
@@ -127,6 +126,7 @@ public sealed class TelegramService
         public required string Text { get; init; }
 
         [JsonPropertyName("parse_mode")]
+        [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
         public string? ParseMode { get; init; }
 
         [JsonPropertyName("disable_web_page_preview")]

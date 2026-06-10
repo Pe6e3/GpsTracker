@@ -208,7 +208,7 @@ if (settings.Telegram.Enabled &&
 
 {
 
-    var features = new List<string> { "геозоны", "угон", "команды stop/start" };
+    var features = new List<string> { "геозоны", "угон", "команды stop/start/wakeup" };
 
     TrafficLogger.LogInfo($"Telegram: enabled ({string.Join(", ", features)})");
 
@@ -239,6 +239,27 @@ if (settings.TrackProcessing.Enabled)
 else
 
     TrafficLogger.LogInfo("Track processing: disabled");
+
+
+
+if (args.Contains("--reprocess-today", StringComparer.OrdinalIgnoreCase))
+{
+    if (!settings.TrackProcessing.Enabled)
+    {
+        TrafficLogger.LogInfo("Track processing disabled, reprocess skipped");
+        return;
+    }
+
+    var processor = app.Services.GetRequiredService<TrackProcessor>();
+    var fromUtc = AppTime.LocalToUtc(AppTime.NowLocal().Date);
+    TrafficLogger.LogInfo($"Reprocessing tracks from {AppTime.UtcToLocal(fromUtc):dd.MM.yyyy HH:mm:ss}...");
+
+    foreach (var device in DeviceRegistry.GetAll())
+        processor.ReprocessFromUtc(device.Id, fromUtc);
+
+    TrafficLogger.LogInfo("Reprocessing complete");
+    return;
+}
 
 
 

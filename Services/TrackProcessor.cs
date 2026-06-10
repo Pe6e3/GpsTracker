@@ -7,6 +7,7 @@ public sealed class TrackProcessor
 {
     private const int MaxRawPointsPerBatch = 2000;
     private const int MaxBatchesPerDevicePerRun = 10;
+    private const int ContextLookbackMinutesBuffer = 5;
 
     private readonly TelemetryStore _telemetryStore;
     private readonly TrackPointStore _trackPointStore;
@@ -46,6 +47,31 @@ public sealed class TrackProcessor
         }
     }
 
+    public void ReprocessFromUtc(string deviceId, DateTime fromUtc)
+    {
+        if (!_settings.Enabled)
+            return;
+
+        var normalizedId = DeviceRegistry.NormalizeId(deviceId);
+        if (string.IsNullOrEmpty(normalizedId))
+            return;
+
+        var firstRawId = _telemetryStore.GetFirstRawIdAtOrAfter(normalizedId, fromUtc);
+        if (!firstRawId.HasValue)
+            return;
+
+        _trackPointStore.DeleteFromRawEndId(normalizedId, firstRawId.Value);
+
+        for (var batchIndex = 0; batchIndex < MaxBatchesPerDevicePerRun * 20; batchIndex++)
+        {
+            var lastProcessedBefore = _trackPointStore.GetLastProcessedRawId(normalizedId);
+            ProcessDevice(normalizedId, DateTime.UtcNow);
+            var lastProcessedAfter = _trackPointStore.GetLastProcessedRawId(normalizedId);
+            if (lastProcessedAfter == lastProcessedBefore)
+                break;
+        }
+    }
+
     public void ProcessDevice(string deviceId, DateTime? cutoffUtc = null)
     {
         if (!_settings.Enabled)
@@ -75,9 +101,10 @@ public sealed class TrackProcessor
         if (rawPoints.Count == 0)
             return;
 
+        var combinedPoints = BuildPointsWithContext(normalizedId, rawPoints, lastProcessedRawId, out var reprocessFromRawId);
         var protocol = DeviceRegistry.GetProtocol(normalizedId);
-        var filteredPoints = TrackOutlierFilter.RemoveOutliers(rawPoints, _settings, protocol);
-        var removedOutliersCount = rawPoints.Count - filteredPoints.Count;
+        var filteredPoints = TrackOutlierFilter.RemoveOutliers(combinedPoints, _settings, protocol);
+        var removedOutliersCount = combinedPoints.Count - filteredPoints.Count;
 
         if (filteredPoints.Count == 0)
         {
@@ -95,6 +122,9 @@ public sealed class TrackProcessor
                 1);
             return;
         }
+
+        if (reprocessFromRawId.HasValue)
+            _trackPointStore.DeleteFromRawEndId(normalizedId, reprocessFromRawId.Value);
 
         var batchId = Guid.NewGuid().ToString("N");
         var createdAtUtc = DateTime.UtcNow;
@@ -121,6 +151,40 @@ public sealed class TrackProcessor
             result.MovingSegmentsCount,
             result.TrackPoints.Count);
     }
+
+    internal static IReadOnlyList<TelemetryPoint> BuildPointsWithContext(
+        TelemetryStore telemetryStore,
+        string normalizedId,
+        IReadOnlyList<TelemetryPoint> rawPoints,
+        long? lastProcessedRawId,
+        TrackProcessingSettings settings,
+        out long? reprocessFromRawId)
+    {
+        reprocessFromRawId = null;
+        if (!lastProcessedRawId.HasValue || rawPoints.Count == 0)
+            return rawPoints;
+
+        var lookbackMinutes = settings.StationaryMinDurationMinutes + ContextLookbackMinutesBuffer;
+        var contextFromUtc = rawPoints[0].GpsTimeUtc.AddMinutes(-lookbackMinutes);
+        var contextPoints = telemetryStore.GetRawTelemetryInRangeBeforeId(
+            normalizedId,
+            contextFromUtc,
+            rawPoints[0].GpsTimeUtc,
+            rawPoints[0].Id);
+
+        if (contextPoints.Count == 0)
+            return rawPoints;
+
+        reprocessFromRawId = contextPoints[0].Id;
+        return contextPoints.Concat(rawPoints).ToArray();
+    }
+
+    private IReadOnlyList<TelemetryPoint> BuildPointsWithContext(
+        string normalizedId,
+        IReadOnlyList<TelemetryPoint> rawPoints,
+        long? lastProcessedRawId,
+        out long? reprocessFromRawId) =>
+        BuildPointsWithContext(_telemetryStore, normalizedId, rawPoints, lastProcessedRawId, _settings, out reprocessFromRawId);
 
     private IReadOnlyList<string> CollectDeviceIds()
     {

@@ -37,7 +37,13 @@ public static class TrackSegmentProcessor
         {
             return new ProcessingResult
             {
-                TrackPoints = CreateStationaryPoints(deviceId, filteredPoints, settings, batchId, createdAtUtc),
+                TrackPoints = CreateStationaryPoints(
+                    deviceId,
+                    filteredPoints,
+                    settings,
+                    batchId,
+                    createdAtUtc,
+                    movementFollowsAfter: false),
                 StationarySegmentsCount = 1,
                 MovingSegmentsCount = 0
             };
@@ -64,12 +70,16 @@ public static class TrackSegmentProcessor
             var stationaryEnd = FindStationaryEnd(filteredPoints, index, settings);
             if (stationaryEnd.HasValue)
             {
+                if (index > 0)
+                    TryAddArrivalMovingPoint(output, filteredPoints, index - 1, index, deviceId, batchId, createdAtUtc, settings);
+
                 output.AddRange(CreateStationaryPoints(
                     deviceId,
                     SliceRange(filteredPoints, index, stationaryEnd.Value),
                     settings,
                     batchId,
-                    createdAtUtc));
+                    createdAtUtc,
+                    MovementFollowsAfter(filteredPoints, stationaryEnd.Value, settings)));
                 stationarySegments++;
                 index = stationaryEnd.Value + 1;
                 continue;
@@ -85,7 +95,8 @@ public static class TrackSegmentProcessor
                     SliceRange(filteredPoints, index, movingEnd),
                     settings,
                     batchId,
-                    createdAtUtc));
+                    createdAtUtc,
+                    MovementFollowsAfter(filteredPoints, movingEnd, settings)));
                 stationarySegments++;
             }
             else
@@ -96,6 +107,17 @@ public static class TrackSegmentProcessor
                     output.AddRange(CreateMovingPoints(deviceId, movingSlice, settings, batchId, createdAtUtc));
                     movingSegments++;
                 }
+
+                if (nextStationaryStart.HasValue)
+                    TryAddArrivalMovingPoint(
+                        output,
+                        filteredPoints,
+                        movingEnd,
+                        nextStationaryStart.Value,
+                        deviceId,
+                        batchId,
+                        createdAtUtc,
+                        settings);
             }
 
             index = movingEnd + 1;
@@ -152,7 +174,11 @@ public static class TrackSegmentProcessor
                 groupEnd = MergeStationaryBounds(groupStart, groupEnd, nextEnd);
             }
 
-            merged.AddRange(CreateStationaryPointsFromBounds(groupStart, groupEnd, settings));
+            merged.AddRange(CreateStationaryPointsFromBounds(
+                groupStart,
+                groupEnd,
+                settings,
+                movementFollowsAfter: MovementFollowsAfterProcessed(points, index)));
         }
 
         return merged;
@@ -247,6 +273,97 @@ public static class TrackSegmentProcessor
             slice[index] = points[startIndex + index];
 
         return slice;
+    }
+
+    private static bool MovementFollowsAfter(
+        IReadOnlyList<TelemetryPoint> points,
+        int stationaryEndIndex,
+        TrackProcessingSettings settings)
+    {
+        var nextIndex = stationaryEndIndex + 1;
+        if (nextIndex >= points.Count)
+            return false;
+
+        return !IsStationaryRange(points, nextIndex, points.Count - 1, settings);
+    }
+
+    private static bool MovementFollowsAfterProcessed(IReadOnlyList<ProcessedTrackPoint> points, int index) =>
+        index < points.Count && points[index].PointType == TrackPointType.Moving;
+
+    private static void TryAddArrivalMovingPoint(
+        List<ProcessedTrackPoint> output,
+        IReadOnlyList<TelemetryPoint> points,
+        int lastMovingIndex,
+        int arrivalIndex,
+        string deviceId,
+        string batchId,
+        DateTime createdAtUtc,
+        TrackProcessingSettings settings)
+    {
+        if (lastMovingIndex < 0 || arrivalIndex >= points.Count || arrivalIndex <= lastMovingIndex)
+            return;
+
+        var previous = points[lastMovingIndex];
+        var arrival = points[arrivalIndex];
+
+        if (!HasCoordinates(previous, arrival))
+            return;
+
+        var distanceMeters = GeoDistance.HaversineMeters(
+            previous.Latitude!.Value,
+            previous.Longitude!.Value,
+            arrival.Latitude!.Value,
+            arrival.Longitude!.Value);
+
+        if (distanceMeters < 50)
+            return;
+
+        if (output.Count > 0)
+        {
+            var lastOutput = output[^1];
+            if (lastOutput.PointType == TrackPointType.Moving &&
+                lastOutput.SourceRawTelemetryId == arrival.Id)
+                return;
+        }
+
+        output.Add(CreatePoint(
+            deviceId,
+            arrival,
+            arrival.Latitude,
+            arrival.Longitude,
+            TrackPointType.Moving,
+            batchId,
+            createdAtUtc,
+            arrival.Id,
+            null,
+            null,
+            null,
+            speedKmh: TrackSpeedHelper.ResolveDisplaySpeedKmh(
+                previous,
+                arrival,
+                arrivalIndex < points.Count - 1 ? points[arrivalIndex + 1] : null,
+                DeviceRegistry.GetProtocol(deviceId),
+                settings)));
+    }
+
+    private static (DateTime StartUtc, DateTime EndUtc) ResolveStationaryDisplayTimestamps(
+        DateTime startUtc,
+        DateTime endUtc,
+        bool movementFollowsAfter)
+    {
+        if (movementFollowsAfter)
+        {
+            var startLocalDate = AppTime.UtcToLocal(startUtc).Date;
+            var endLocalDate = AppTime.UtcToLocal(endUtc).Date;
+            if (startLocalDate < endLocalDate)
+            {
+                var midnightUtc = AppTime.LocalToUtc(endLocalDate);
+                if (midnightUtc <= endUtc)
+                    return (midnightUtc, endUtc);
+            }
+        }
+
+        return (startUtc, endUtc);
     }
 
     private static int? FindNextStationaryStart(
@@ -437,7 +554,8 @@ public static class TrackSegmentProcessor
         IReadOnlyList<TelemetryPoint> points,
         TrackProcessingSettings settings,
         string batchId,
-        DateTime createdAtUtc)
+        DateTime createdAtUtc,
+        bool movementFollowsAfter)
     {
         var center = ComputeStationaryCenter(points);
         var bounds = new ProcessedTrackPoint
@@ -446,7 +564,7 @@ public static class TrackSegmentProcessor
             TimestampUtc = points[0].GpsTimeUtc,
             Latitude = center.Latitude,
             Longitude = center.Longitude,
-            SpeedKmh = points[0].SpeedKmh,
+            SpeedKmh = 0,
             Course = points[0].Direction,
             Altitude = points[0].Altitude,
             Accuracy = points[0].Accuracy,
@@ -465,7 +583,7 @@ public static class TrackSegmentProcessor
             TimestampUtc = points[^1].GpsTimeUtc,
             Latitude = center.Latitude,
             Longitude = center.Longitude,
-            SpeedKmh = points[^1].SpeedKmh,
+            SpeedKmh = 0,
             Course = points[^1].Direction,
             Altitude = points[^1].Altitude,
             Accuracy = points[^1].Accuracy,
@@ -478,106 +596,46 @@ public static class TrackSegmentProcessor
             RawEndId = points[^1].Id
         };
 
-        return CreateStationaryPointsFromBounds(bounds, endBounds, settings, points);
+        return CreateStationaryPointsFromBounds(bounds, endBounds, settings, points, movementFollowsAfter);
     }
 
     public static IReadOnlyList<ProcessedTrackPoint> CreateStationaryPointsFromBounds(
         ProcessedTrackPoint groupStart,
         ProcessedTrackPoint groupEnd,
         TrackProcessingSettings settings,
-        IReadOnlyList<TelemetryPoint>? sourcePoints = null)
+        IReadOnlyList<TelemetryPoint>? sourcePoints = null,
+        bool movementFollowsAfter = false)
     {
-        var startTime = groupStart.TimestampUtc;
-        var endTime = groupEnd.TimestampUtc;
-        var durationHours = (endTime - startTime).TotalHours;
+        var (startUtc, endUtc) = ResolveStationaryDisplayTimestamps(
+            groupStart.TimestampUtc,
+            groupEnd.TimestampUtc,
+            movementFollowsAfter);
 
-        if (durationHours < 1)
-        {
-            return
-            [
-                CopyStationaryPoint(groupStart, TrackPointType.StationaryStart),
-                CopyStationaryPoint(groupEnd, TrackPointType.StationaryEnd)
-            ];
-        }
-
-        var timestamps = BuildStationaryHourlyTimestamps(
-            startTime,
-            endTime,
-            settings.StationaryHourlyIntervalMinutes);
-        var output = new List<ProcessedTrackPoint>(timestamps.Count);
-
-        for (var index = 0; index < timestamps.Count; index++)
-        {
-            var timestamp = timestamps[index];
-            var pointType = index == 0
-                ? TrackPointType.StationaryStart
-                : index == timestamps.Count - 1
-                    ? TrackPointType.StationaryEnd
-                    : TrackPointType.Heartbeat;
-
-            TelemetryPoint? nearestSource = null;
-            if (sourcePoints != null && pointType == TrackPointType.Heartbeat)
-                nearestSource = FindNearestRawPoint(sourcePoints, timestamp);
-
-            var sourceRawId = index == 0
-                ? groupStart.SourceRawTelemetryId ?? groupStart.RawStartId
-                : index == timestamps.Count - 1
-                    ? groupEnd.SourceRawTelemetryId ?? groupEnd.RawEndId
-                    : nearestSource?.Id ?? groupStart.SourceRawTelemetryId;
-
-            output.Add(new ProcessedTrackPoint
-            {
-                DeviceId = groupStart.DeviceId,
-                TimestampUtc = timestamp,
-                Latitude = groupStart.Latitude,
-                Longitude = groupStart.Longitude,
-                SpeedKmh = index == 0
-                    ? groupStart.SpeedKmh
-                    : index == timestamps.Count - 1
-                        ? groupEnd.SpeedKmh
-                        : nearestSource?.SpeedKmh ?? 0,
-                Course = index == 0
-                    ? groupStart.Course
-                    : index == timestamps.Count - 1
-                        ? groupEnd.Course
-                        : nearestSource?.Direction ?? 0,
-                Altitude = index == 0
-                    ? groupStart.Altitude
-                    : index == timestamps.Count - 1
-                        ? groupEnd.Altitude
-                        : nearestSource?.Altitude ?? 0,
-                Accuracy = index == 0
-                    ? groupStart.Accuracy
-                    : index == timestamps.Count - 1
-                        ? groupEnd.Accuracy
-                        : nearestSource?.Accuracy,
-                SourceRawTelemetryId = sourceRawId,
-                PointType = pointType,
-                ProcessingBatchId = groupStart.ProcessingBatchId,
-                CreatedAtUtc = groupStart.CreatedAtUtc,
-                OriginalPointsCount = index == 0 || index == timestamps.Count - 1
-                    ? groupStart.OriginalPointsCount ?? groupEnd.OriginalPointsCount
-                    : null,
-                RawStartId = index == 0 ? groupStart.RawStartId : null,
-                RawEndId = index == timestamps.Count - 1 ? groupEnd.RawEndId : null
-            });
-        }
-
-        return output;
+        return
+        [
+            BuildStationaryDisplayPoint(groupStart, startUtc, TrackPointType.StationaryStart, isEnd: false),
+            BuildStationaryDisplayPoint(groupEnd, endUtc, TrackPointType.StationaryEnd, isEnd: true)
+        ];
     }
 
-    private static ProcessedTrackPoint CopyStationaryPoint(ProcessedTrackPoint source, string pointType) =>
+    private static ProcessedTrackPoint BuildStationaryDisplayPoint(
+        ProcessedTrackPoint source,
+        DateTime timestampUtc,
+        string pointType,
+        bool isEnd) =>
         new()
         {
             DeviceId = source.DeviceId,
-            TimestampUtc = source.TimestampUtc,
+            TimestampUtc = timestampUtc,
             Latitude = source.Latitude,
             Longitude = source.Longitude,
-            SpeedKmh = source.SpeedKmh,
+            SpeedKmh = 0,
             Course = source.Course,
             Altitude = source.Altitude,
             Accuracy = source.Accuracy,
-            SourceRawTelemetryId = source.SourceRawTelemetryId,
+            SourceRawTelemetryId = isEnd
+                ? source.SourceRawTelemetryId ?? source.RawEndId
+                : source.SourceRawTelemetryId ?? source.RawStartId,
             PointType = pointType,
             ProcessingBatchId = source.ProcessingBatchId,
             CreatedAtUtc = source.CreatedAtUtc,
@@ -585,50 +643,6 @@ public static class TrackSegmentProcessor
             RawStartId = source.RawStartId,
             RawEndId = source.RawEndId
         };
-
-    private static List<DateTime> BuildStationaryHourlyTimestamps(
-        DateTime startUtc,
-        DateTime endUtc,
-        int intervalMinutes)
-    {
-        if (endUtc <= startUtc)
-            return [startUtc];
-
-        var interval = TimeSpan.FromMinutes(Math.Max(1, intervalMinutes));
-        var timestamps = new List<DateTime> { startUtc };
-        var next = startUtc + interval;
-
-        while (next < endUtc)
-        {
-            timestamps.Add(next);
-            next += interval;
-        }
-
-        if (timestamps[^1] != endUtc)
-            timestamps.Add(endUtc);
-
-        return timestamps;
-    }
-
-    private static TelemetryPoint FindNearestRawPoint(
-        IReadOnlyList<TelemetryPoint> points,
-        DateTime timestampUtc)
-    {
-        var bestIndex = 0;
-        var bestDistance = double.MaxValue;
-
-        for (var index = 0; index < points.Count; index++)
-        {
-            var distance = Math.Abs((points[index].GpsTimeUtc - timestampUtc).TotalSeconds);
-            if (distance >= bestDistance)
-                continue;
-
-            bestDistance = distance;
-            bestIndex = index;
-        }
-
-        return points[bestIndex];
-    }
 
     private static IReadOnlyList<ProcessedTrackPoint> CreateMovingPoints(
         string deviceId,
@@ -641,8 +655,22 @@ public static class TrackSegmentProcessor
             ? SimplifyMovingPoints(points, settings.DouglasPeuckerToleranceMeters)
             : points;
 
-        return simplified
-            .Select(point => CreatePoint(
+        var protocol = DeviceRegistry.GetProtocol(deviceId);
+        var result = new List<ProcessedTrackPoint>(simplified.Count);
+
+        for (var index = 0; index < simplified.Count; index++)
+        {
+            var point = simplified[index];
+            var previous = index > 0 ? simplified[index - 1] : null;
+            var next = index < simplified.Count - 1 ? simplified[index + 1] : null;
+            var speedKmh = TrackSpeedHelper.ResolveDisplaySpeedKmh(
+                previous,
+                point,
+                next,
+                protocol,
+                settings);
+
+            result.Add(CreatePoint(
                 deviceId,
                 point,
                 point.Latitude,
@@ -653,8 +681,11 @@ public static class TrackSegmentProcessor
                 point.Id,
                 null,
                 null,
-                null))
-            .ToArray();
+                null,
+                speedKmh: speedKmh));
+        }
+
+        return result;
     }
 
     private static IReadOnlyList<TelemetryPoint> SimplifyMovingPoints(
@@ -781,14 +812,15 @@ public static class TrackSegmentProcessor
         int? originalPointsCount,
         long? rawStartId,
         long? rawEndId,
-        DateTime? timestampUtc = null) =>
+        DateTime? timestampUtc = null,
+        double? speedKmh = null) =>
         new()
         {
             DeviceId = deviceId,
             TimestampUtc = timestampUtc ?? source.GpsTimeUtc,
             Latitude = latitude,
             Longitude = longitude,
-            SpeedKmh = source.SpeedKmh,
+            SpeedKmh = speedKmh ?? source.SpeedKmh,
             Course = source.Direction,
             Altitude = source.Altitude,
             Accuracy = source.Accuracy,

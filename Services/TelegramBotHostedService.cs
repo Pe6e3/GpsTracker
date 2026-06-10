@@ -14,7 +14,7 @@ public sealed class TelegramBotHostedService : BackgroundService
         if (!_botService.IsConfigured)
             return;
 
-        TrafficLogger.LogInfo("Telegram bot: polling commands (stop/start)");
+        TrafficLogger.LogInfo("Telegram bot: polling commands (stop/start/wakeup)");
 
         while (!stoppingToken.IsCancellationRequested)
         {

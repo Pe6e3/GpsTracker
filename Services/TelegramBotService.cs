@@ -115,12 +115,56 @@ public sealed partial class TelegramBotService
             await SendDeviceMapLinksAsync(cancellationToken);
             return;
         }
+
+        if (string.Equals(command, "wakeup", StringComparison.OrdinalIgnoreCase))
+        {
+            await SendWakeupCommandAsync(cancellationToken);
+            return;
+        }
+    }
+
+    private async Task SendWakeupCommandAsync(CancellationToken cancellationToken)
+    {
+        var phoneId = _proxySettings.TheftDetection.PhoneDeviceId;
+        if (string.IsNullOrWhiteSpace(phoneId))
+        {
+            await _telegramService.SendRawAsync("PhoneDeviceId не задан в конфиге.", cancellationToken);
+            return;
+        }
+
+        if (!DeviceRegistry.Exists(phoneId))
+        {
+            await _telegramService.SendRawAsync($"Устройство «{phoneId}» не найдено.", cancellationToken);
+            return;
+        }
+
+        if (DeviceRegistry.GetProtocol(phoneId) != DeviceProtocol.OwnTracks)
+        {
+            await _telegramService.SendRawAsync($"Устройство «{phoneId}» не OwnTracks.", cancellationToken);
+            return;
+        }
+
+        var mqttService = _serviceProvider.GetRequiredService<MqttService>();
+        try
+        {
+            await mqttService.RequestLocationAsync(phoneId, cancellationToken);
+            var label = DeviceRegistry.GetDisplayName(phoneId);
+            var deviceLabel = label == phoneId || label == "?" ? phoneId : $"{label} ({phoneId})";
+            var mapUrl = MapLinkBuilder.BuildDeviceUrl(_settings.MapBaseUrl, phoneId);
+            await _telegramService.SendRawAsync(
+                $"📲 wakeup → {deviceLabel}\n<a href=\"{HtmlEncode(mapUrl)}\">🖥️ {HtmlEncode(mapUrl)}</a>",
+                "HTML",
+                cancellationToken);
+        }
+        catch (Exception ex)
+        {
+            await _telegramService.SendRawAsync($"Не удалось отправить wakeup: {ex.Message}", cancellationToken);
+        }
     }
 
     private async Task SendDeviceMapLinksAsync(CancellationToken cancellationToken)
     {
         var telemetryStore = _serviceProvider.GetRequiredService<TelemetryStore>();
-        var mapBaseUrl = _settings.MapBaseUrl.Trim().TrimEnd('/');
         var lines = new List<string> { "📍 Текущие позиции:" };
 
         foreach (var device in DeviceRegistry.GetAll())
@@ -140,7 +184,7 @@ public sealed partial class TelegramBotService
 
             var lat = point.Latitude.Value;
             var lon = point.Longitude.Value;
-            var mapUrl = $"{mapBaseUrl}/{Uri.EscapeDataString(device.Id)}";
+            var mapUrl = MapLinkBuilder.BuildDeviceUrl(_settings.MapBaseUrl, device.Id);
             var yandexUrl =
                 $"https://yandex.ru/maps/?pt={lon.ToString("F5", CultureInfo.InvariantCulture)},{lat.ToString("F5", CultureInfo.InvariantCulture)}&z=16&l=map";
             var batterySuffix = point.Battery.HasValue ? $" {point.Battery.Value}%" : string.Empty;
