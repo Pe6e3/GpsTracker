@@ -338,12 +338,10 @@ public static class TrackSegmentProcessor
             null,
             null,
             null,
-            speedKmh: TrackSpeedHelper.ResolveDisplaySpeedKmh(
+            speedKmh: TrackSpeedHelper.CalculateSpeedKmh(
                 previous,
                 arrival,
-                arrivalIndex < points.Count - 1 ? points[arrivalIndex + 1] : null,
-                DeviceRegistry.GetProtocol(deviceId),
-                settings)));
+                arrivalIndex < points.Count - 1 ? points[arrivalIndex + 1] : null)));
     }
 
     private static (DateTime StartUtc, DateTime EndUtc) ResolveStationaryDisplayTimestamps(
@@ -611,24 +609,72 @@ public static class TrackSegmentProcessor
             groupEnd.TimestampUtc,
             movementFollowsAfter);
 
+        var (displayLatitude, displayLongitude) = ResolveStationaryDisplayCoordinates(
+            groupStart,
+            groupEnd,
+            sourcePoints);
+
         return
         [
-            BuildStationaryDisplayPoint(groupStart, startUtc, TrackPointType.StationaryStart, isEnd: false),
-            BuildStationaryDisplayPoint(groupEnd, endUtc, TrackPointType.StationaryEnd, isEnd: true)
+            BuildStationaryDisplayPoint(
+                groupStart,
+                startUtc,
+                TrackPointType.StationaryStart,
+                isEnd: false,
+                displayLatitude,
+                displayLongitude),
+            BuildStationaryDisplayPoint(
+                groupEnd,
+                endUtc,
+                TrackPointType.StationaryEnd,
+                isEnd: true,
+                displayLatitude,
+                displayLongitude)
         ];
+    }
+
+    private static (double Latitude, double Longitude) ResolveStationaryDisplayCoordinates(
+        ProcessedTrackPoint groupStart,
+        ProcessedTrackPoint groupEnd,
+        IReadOnlyList<TelemetryPoint>? sourcePoints)
+    {
+        if (sourcePoints is { Count: > 0 })
+            return ComputeStationaryCenter(sourcePoints);
+
+        var latitudeValues = new List<double>(2);
+        var longitudeValues = new List<double>(2);
+
+        if (groupStart.Latitude.HasValue && groupStart.Longitude.HasValue)
+        {
+            latitudeValues.Add(groupStart.Latitude.Value);
+            longitudeValues.Add(groupStart.Longitude.Value);
+        }
+
+        if (groupEnd.Latitude.HasValue && groupEnd.Longitude.HasValue)
+        {
+            latitudeValues.Add(groupEnd.Latitude.Value);
+            longitudeValues.Add(groupEnd.Longitude.Value);
+        }
+
+        if (latitudeValues.Count == 0)
+            return (0, 0);
+
+        return (latitudeValues.Average(), longitudeValues.Average());
     }
 
     private static ProcessedTrackPoint BuildStationaryDisplayPoint(
         ProcessedTrackPoint source,
         DateTime timestampUtc,
         string pointType,
-        bool isEnd) =>
+        bool isEnd,
+        double? displayLatitude = null,
+        double? displayLongitude = null) =>
         new()
         {
             DeviceId = source.DeviceId,
             TimestampUtc = timestampUtc,
-            Latitude = source.Latitude,
-            Longitude = source.Longitude,
+            Latitude = displayLatitude ?? source.Latitude,
+            Longitude = displayLongitude ?? source.Longitude,
             SpeedKmh = 0,
             Course = source.Course,
             Altitude = source.Altitude,
@@ -655,7 +701,6 @@ public static class TrackSegmentProcessor
             ? SimplifyMovingPoints(points, settings.DouglasPeuckerToleranceMeters)
             : points;
 
-        var protocol = DeviceRegistry.GetProtocol(deviceId);
         var result = new List<ProcessedTrackPoint>(simplified.Count);
 
         for (var index = 0; index < simplified.Count; index++)
@@ -663,12 +708,7 @@ public static class TrackSegmentProcessor
             var point = simplified[index];
             var previous = index > 0 ? simplified[index - 1] : null;
             var next = index < simplified.Count - 1 ? simplified[index + 1] : null;
-            var speedKmh = TrackSpeedHelper.ResolveDisplaySpeedKmh(
-                previous,
-                point,
-                next,
-                protocol,
-                settings);
+            var speedKmh = TrackSpeedHelper.CalculateSpeedKmh(previous, point, next);
 
             result.Add(CreatePoint(
                 deviceId,

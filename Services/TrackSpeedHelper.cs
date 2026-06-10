@@ -5,65 +5,35 @@ namespace GpsTcpProxy.Services;
 public static class TrackSpeedHelper
 {
     private const double MinTimeDeltaSeconds = 1;
-    private const double ReportedSpeedMarginKmh = 10;
-    private const double ReportedSpeedRatio = 1.35;
-    private const double ReportedSpeedRatioOffsetKmh = 8;
 
-    public static double ResolveDisplaySpeedKmh(
-        TelemetryPoint? previous,
-        TelemetryPoint current,
-        TelemetryPoint? next,
-        DeviceProtocol protocol,
-        TrackProcessingSettings settings)
-    {
-        var maxSpeed = GetMaxSpeed(protocol, settings);
-        var reported = Math.Max(0, current.SpeedKmh);
-        var fromPrevious = TryCalculateSpeedKmh(previous, current);
-        var fromNext = TryCalculateSpeedKmh(current, next);
-        var derived = CombineDerivedSpeed(fromPrevious, fromNext);
-
-        if (!derived.HasValue)
-            return Math.Min(reported, maxSpeed);
-
-        var derivedClamped = Math.Min(Math.Max(0, derived.Value), maxSpeed);
-
-        if (reported <= derivedClamped + ReportedSpeedMarginKmh)
-            return Math.Min(reported, maxSpeed);
-
-        if (reported > derivedClamped * ReportedSpeedRatio + ReportedSpeedRatioOffsetKmh)
-            return derivedClamped;
-
-        return Math.Min(reported, maxSpeed);
-    }
-
-    public static double ResolveDisplaySpeedKmh(
+    public static double CalculateSpeedKmh(
         TrackPointDto? previous,
         TrackPointDto current,
-        TrackPointDto? next,
-        DeviceProtocol protocol,
-        TrackProcessingSettings settings)
+        TrackPointDto? next)
     {
         if (IsStationaryPointType(current.PointType))
             return 0;
 
-        var maxSpeed = GetMaxSpeed(protocol, settings);
-        var reported = Math.Max(0, current.Speed);
-        var fromPrevious = TryCalculateSpeedKmh(previous, current);
-        var fromNext = TryCalculateSpeedKmh(current, next);
+        return CalculateSpeedKmhFromNeighbors(
+            TryCalculateSpeedKmh(previous, current),
+            TryCalculateSpeedKmh(current, next));
+    }
+
+    public static double CalculateSpeedKmh(
+        TelemetryPoint? previous,
+        TelemetryPoint current,
+        TelemetryPoint? next) =>
+        CalculateSpeedKmhFromNeighbors(
+            TryCalculateSpeedKmh(previous, current),
+            TryCalculateSpeedKmh(current, next));
+
+    private static double CalculateSpeedKmhFromNeighbors(double? fromPrevious, double? fromNext)
+    {
         var derived = CombineDerivedSpeed(fromPrevious, fromNext);
 
-        if (!derived.HasValue)
-            return Math.Min(reported, maxSpeed);
-
-        var derivedClamped = Math.Min(Math.Max(0, derived.Value), maxSpeed);
-
-        if (reported <= derivedClamped + ReportedSpeedMarginKmh)
-            return Math.Min(reported, maxSpeed);
-
-        if (reported > derivedClamped * ReportedSpeedRatio + ReportedSpeedRatioOffsetKmh)
-            return derivedClamped;
-
-        return Math.Min(reported, maxSpeed);
+        return derived.HasValue
+            ? Math.Max(0, derived.Value)
+            : 0;
     }
 
     private static bool IsStationaryPointType(string? pointType) =>
@@ -125,9 +95,4 @@ public static class TrackSpeedHelper
 
         return distanceKm / (timeDeltaSeconds / 3600d);
     }
-
-    private static double GetMaxSpeed(DeviceProtocol protocol, TrackProcessingSettings settings) =>
-        protocol == DeviceProtocol.OwnTracks
-            ? settings.PhoneMaxSpeedKmh
-            : settings.VehicleMaxSpeedKmh;
 }

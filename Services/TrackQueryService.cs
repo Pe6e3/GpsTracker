@@ -42,9 +42,9 @@ public sealed class TrackQueryService
             {
                 DeviceId = normalizedId,
                 DeviceName = deviceName,
-                Points = ApplyDisplaySpeedCorrection(
-                    FilterDisplayPoints(rawTrack.Select(MapRawPoint)),
-                    normalizedId)
+                Points = ApplyCalculatedSpeed(
+                    UnifyStationaryCoordinates(
+                        FilterDisplayPoints(rawTrack.Select(MapRawPoint))))
             };
         }
 
@@ -85,20 +85,75 @@ public sealed class TrackQueryService
         {
             DeviceId = normalizedId,
             DeviceName = deviceName,
-            Points = ApplyDisplaySpeedCorrection(
-                FilterDisplayPoints(merged),
-                normalizedId)
+            Points = ApplyCalculatedSpeed(
+                UnifyStationaryCoordinates(
+                    FilterDisplayPoints(merged)))
         };
     }
 
-    private TrackPointDto[] ApplyDisplaySpeedCorrection(
-        TrackPointDto[] points,
-        string deviceId)
+    private static TrackPointDto[] UnifyStationaryCoordinates(TrackPointDto[] points)
+    {
+        if (points.Length < 2)
+            return points;
+
+        var unified = new TrackPointDto[points.Length];
+
+        for (var index = 0; index < points.Length; index++)
+            unified[index] = points[index];
+
+        for (var index = 0; index < points.Length - 1; index++)
+        {
+            var start = unified[index];
+            var end = unified[index + 1];
+
+            if (start.PointType != TrackPointType.StationaryStart ||
+                end.PointType != TrackPointType.StationaryEnd ||
+                start.Lat == null || start.Lon == null || end.Lat == null || end.Lon == null)
+                continue;
+
+            var latitude = (start.Lat.Value + end.Lat.Value) / 2d;
+            var longitude = (start.Lon.Value + end.Lon.Value) / 2d;
+
+            unified[index] = CloneTrackPoint(start, latitude, longitude);
+            unified[index + 1] = CloneTrackPoint(end, latitude, longitude);
+        }
+
+        return unified;
+    }
+
+    private static TrackPointDto CloneTrackPoint(TrackPointDto point, double latitude, double longitude) =>
+        new()
+        {
+            Lat = latitude,
+            Lon = longitude,
+            Accuracy = point.Accuracy,
+            Alt = point.Alt,
+            Speed = point.Speed,
+            TimeUtc = point.TimeUtc,
+            TimeLocal = point.TimeLocal,
+            Geofences = point.Geofences,
+            PointType = point.PointType
+        };
+
+    private static TrackPointDto WithSpeed(TrackPointDto point, double speed) =>
+        new()
+        {
+            Lat = point.Lat,
+            Lon = point.Lon,
+            Accuracy = point.Accuracy,
+            Alt = point.Alt,
+            Speed = speed,
+            TimeUtc = point.TimeUtc,
+            TimeLocal = point.TimeLocal,
+            Geofences = point.Geofences,
+            PointType = point.PointType
+        };
+
+    private TrackPointDto[] ApplyCalculatedSpeed(TrackPointDto[] points)
     {
         if (points.Length == 0)
             return points;
 
-        var protocol = DeviceRegistry.GetProtocol(deviceId);
         var corrected = new TrackPointDto[points.Length];
 
         for (var index = 0; index < points.Length; index++)
@@ -106,27 +161,11 @@ public sealed class TrackQueryService
             var point = points[index];
             var previous = index > 0 ? points[index - 1] : null;
             var next = index < points.Length - 1 ? points[index + 1] : null;
-            var speed = TrackSpeedHelper.ResolveDisplaySpeedKmh(
-                previous,
-                point,
-                next,
-                protocol,
-                _trackProcessingSettings);
+            var speed = TrackSpeedHelper.CalculateSpeedKmh(previous, point, next);
 
-            corrected[index] = speed == point.Speed
+            corrected[index] = Math.Abs(speed - point.Speed) < 0.01
                 ? point
-                : new TrackPointDto
-                {
-                    Lat = point.Lat,
-                    Lon = point.Lon,
-                    Accuracy = point.Accuracy,
-                    Alt = point.Alt,
-                    Speed = speed,
-                    TimeUtc = point.TimeUtc,
-                    TimeLocal = point.TimeLocal,
-                    Geofences = point.Geofences,
-                    PointType = point.PointType
-                };
+                : WithSpeed(point, speed);
         }
 
         return corrected;
