@@ -127,26 +127,30 @@ public sealed partial class TelegramBotService
 
     private async Task SendWakeupCommandAsync(CancellationToken cancellationToken)
     {
-        var phoneId = _proxySettings.TheftDetection.PhoneDeviceId;
-        if (string.IsNullOrWhiteSpace(phoneId))
+        var phoneIds = _proxySettings.TheftDetection.GetPhoneDeviceIds();
+        if (phoneIds.Count == 0)
         {
-            await _telegramService.SendRawAsync("PhoneDeviceId не задан в конфиге.", cancellationToken);
-            return;
-        }
-
-        if (!DeviceRegistry.Exists(phoneId))
-        {
-            await _telegramService.SendRawAsync($"Устройство «{phoneId}» не найдено.", cancellationToken);
-            return;
-        }
-
-        if (DeviceRegistry.GetProtocol(phoneId) != DeviceProtocol.OwnTracks)
-        {
-            await _telegramService.SendRawAsync($"Устройство «{phoneId}» не OwnTracks.", cancellationToken);
+            await _telegramService.SendRawAsync("PhoneDeviceIds не заданы в конфиге.", cancellationToken);
             return;
         }
 
         var mqttService = _serviceProvider.GetRequiredService<MqttService>();
+        var lines = await Task.WhenAll(phoneIds.Select(phoneId => BuildWakeupLineAsync(mqttService, phoneId)));
+
+        await _telegramService.SendRawAsync(string.Join('\n', lines), "HTML", CancellationToken.None);
+    }
+
+    private async Task<string> BuildWakeupLineAsync(MqttService mqttService, string phoneId)
+    {
+        if (!DeviceRegistry.Exists(phoneId))
+            return $"📲 wakeup → {HtmlEncode(phoneId)} — устройство не найдено";
+
+        if (DeviceRegistry.GetProtocol(phoneId) != DeviceProtocol.OwnTracks)
+            return $"📲 wakeup → {HtmlEncode(phoneId)} — не OwnTracks";
+
+        var label = DeviceRegistry.GetDisplayName(phoneId);
+        var deviceLabel = label == phoneId || label == "?" ? phoneId : $"{label} ({phoneId})";
+
         OwnTracksLocationMessage? location;
         try
         {
@@ -157,27 +161,18 @@ public sealed partial class TelegramBotService
         }
         catch (Exception ex)
         {
-            await _telegramService.SendRawAsync(
-                $"Не удалось отправить wakeup: {ex.Message}",
-                cancellationToken: CancellationToken.None);
-            return;
+            return $"📲 wakeup → {HtmlEncode(deviceLabel)} — ошибка: {HtmlEncode(ex.Message)}";
         }
 
-        var label = DeviceRegistry.GetDisplayName(phoneId);
-        var deviceLabel = label == phoneId || label == "?" ? phoneId : $"{label} ({phoneId})";
         if (location == null)
         {
-            await _telegramService.SendRawAsync(
-                $"📲 wakeup → {deviceLabel}\nОтвет от телефона не пришёл за {(int)WakeupResponseTimeout.TotalSeconds} сек.",
-                cancellationToken: CancellationToken.None);
-            return;
+            return
+                $"📲 wakeup → {HtmlEncode(deviceLabel)}\n" +
+                $"Ответ не пришёл за {(int)WakeupResponseTimeout.TotalSeconds} сек.";
         }
 
         var googleUrl = MapLinkBuilder.BuildGoogleMapsUrl(location.Latitude, location.Longitude);
-        await _telegramService.SendRawAsync(
-            $"📲 wakeup → {deviceLabel} <a href=\"{HtmlEncode(googleUrl)}\">🗺️</a>",
-            "HTML",
-            CancellationToken.None);
+        return $"📲 wakeup → {HtmlEncode(deviceLabel)} <a href=\"{HtmlEncode(googleUrl)}\">🗺️</a>";
     }
 
     private async Task SendDeviceMapLinksAsync(CancellationToken cancellationToken)
@@ -187,7 +182,7 @@ public sealed partial class TelegramBotService
 
         foreach (var device in DeviceRegistry.GetAll())
         {
-            var maxAccuracy = string.Equals(device.Id, _proxySettings.TheftDetection.PhoneDeviceId, StringComparison.Ordinal)
+            var maxAccuracy = _proxySettings.TheftDetection.IsPhoneDevice(device.Id)
                 ? _proxySettings.Mqtt.MaxTrackAccuracyMeters
                 : (double?)null;
 

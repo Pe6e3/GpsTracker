@@ -3,7 +3,63 @@ namespace GpsTcpProxy.Models;
 public sealed class TheftDetectionSettings
 {
     public bool Enabled { get; set; } = true;
+
+    /// <summary>Один телефон (устаревшее поле, для обратной совместимости).</summary>
     public string PhoneDeviceId { get; set; } = "phone";
+
+    /// <summary>Список телефонов OwnTracks для сравнения и команд wakeup.</summary>
+    public List<string> PhoneDeviceIds { get; set; } = [];
+
+    public IReadOnlyList<string> GetPhoneDeviceIds()
+    {
+        var ids = new List<string>();
+
+        if (!string.IsNullOrWhiteSpace(PhoneDeviceId))
+            AddUnique(ids, PhoneDeviceId);
+
+        if (PhoneDeviceIds != null)
+        {
+            foreach (var phoneId in PhoneDeviceIds)
+                AddUnique(ids, phoneId);
+        }
+
+        return ids;
+    }
+
+    public bool IsPhoneDevice(string deviceId)
+    {
+        if (string.IsNullOrWhiteSpace(deviceId))
+            return false;
+
+        var normalizedId = DeviceRegistry.NormalizeId(deviceId);
+        if (string.IsNullOrEmpty(normalizedId))
+            normalizedId = deviceId.Trim();
+
+        foreach (var phoneId in GetPhoneDeviceIds())
+        {
+            if (phoneId.Equals(deviceId, StringComparison.OrdinalIgnoreCase))
+                return true;
+
+            var normalizedPhoneId = DeviceRegistry.NormalizeId(phoneId);
+            if (!string.IsNullOrEmpty(normalizedPhoneId) &&
+                normalizedPhoneId.Equals(normalizedId, StringComparison.OrdinalIgnoreCase))
+                return true;
+        }
+
+        return false;
+    }
+
+    private static void AddUnique(List<string> ids, string? deviceId)
+    {
+        if (string.IsNullOrWhiteSpace(deviceId))
+            return;
+
+        var trimmed = deviceId.Trim();
+        if (ids.Any(id => id.Equals(trimmed, StringComparison.OrdinalIgnoreCase)))
+            return;
+
+        ids.Add(trimmed);
+    }
 
     /// <summary>Базовый допустимый разрыв между трекером и телефоном, км.</summary>
     public double BaseDistanceKm { get; set; } = 0.5;

@@ -222,7 +222,7 @@ else
 
 if (settings.TheftDetection.Enabled)
 
-    TrafficLogger.LogInfo($"Theft detection: enabled (phone={settings.TheftDetection.PhoneDeviceId})");
+    TrafficLogger.LogInfo($"Theft detection: enabled (phones={string.Join(", ", settings.TheftDetection.GetPhoneDeviceIds())})");
 
 else
 

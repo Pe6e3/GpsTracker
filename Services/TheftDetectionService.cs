@@ -48,22 +48,14 @@ public sealed class TheftDetectionService
             return;
         }
 
-        var phonePoint = GetTelemetryStore().GetLatestPosition(
-            cfg.PhoneDeviceId,
-            _settings.Mqtt.MaxTrackAccuracyMeters);
-
-        if (phonePoint?.Latitude == null || phonePoint.Longitude == null)
+        var phoneReference = FindNearestPhoneReference(latitude, longitude, gpsTimeUtc);
+        if (phoneReference == null)
             return;
 
-        var phoneAgeMinutes = Math.Max(0, (gpsTimeUtc - phonePoint.GpsTimeUtc).TotalMinutes);
-        if (phoneAgeMinutes > cfg.MaxPhoneAgeMinutes)
-            return;
-
-        var distanceKm = GeoDistance.HaversineKm(
-            latitude,
-            longitude,
-            phonePoint.Latitude.Value,
-            phonePoint.Longitude.Value);
+        var phonePoint = phoneReference.Point;
+        var phoneId = phoneReference.DeviceId;
+        var phoneAgeMinutes = phoneReference.AgeMinutes;
+        var distanceKm = phoneReference.DistanceKm;
 
         var allowedKm = CalculateAllowedDistanceKm(speedKmh, phonePoint.SpeedKmh, phoneAgeMinutes, distanceKm);
         var isCritical = distanceKm >= cfg.CriticalDistanceKm;
@@ -89,28 +81,74 @@ public sealed class TheftDetectionService
         _suspiciousCounts.TryRemove(normalizedId, out _);
 
         var deviceName = DeviceRegistry.GetDisplayName(normalizedId);
-        var phoneName = DeviceRegistry.GetDisplayName(cfg.PhoneDeviceId);
+        var phoneName = DeviceRegistry.GetDisplayName(phoneId);
         var gpsTimeLocal = AppTime.UtcToLocal(gpsTimeUtc).ToString("dd.MM.yyyy HH:mm:ss", CultureInfo.InvariantCulture);
 
         TrafficLogger.LogInfo(
             $"[THEFT] {FormatLabel(normalizedId, deviceName)}: вне геозоны, " +
-            $"расстояние до {FormatLabel(cfg.PhoneDeviceId, phoneName)} = {distanceKm:F2} км " +
+            $"расстояние до {FormatLabel(phoneId, phoneName)} = {distanceKm:F2} км " +
             $"(допуск {allowedKm:F2} км, скорость {speedKmh:F0}/{phonePoint.SpeedKmh:F0} км/ч)");
 
         _telegramService.NotifyTheftAlert(
             normalizedId,
             deviceName,
-            cfg.PhoneDeviceId,
+            phoneId,
             phoneName,
             latitude,
             longitude,
-            phonePoint.Latitude.Value,
-            phonePoint.Longitude.Value,
+            phonePoint.Latitude!.Value,
+            phonePoint.Longitude!.Value,
             distanceKm,
             speedKmh,
             phonePoint.SpeedKmh,
             gpsTimeLocal);
     }
+
+    private PhoneReference? FindNearestPhoneReference(
+        double latitude,
+        double longitude,
+        DateTime gpsTimeUtc)
+    {
+        var cfg = _settings.TheftDetection;
+        PhoneReference? nearest = null;
+
+        foreach (var phoneId in cfg.GetPhoneDeviceIds())
+        {
+            var phonePoint = GetTelemetryStore().GetLatestPosition(
+                phoneId,
+                _settings.Mqtt.MaxTrackAccuracyMeters);
+
+            if (phonePoint?.Latitude == null || phonePoint.Longitude == null)
+                continue;
+
+            var phoneAgeMinutes = Math.Max(0, (gpsTimeUtc - phonePoint.GpsTimeUtc).TotalMinutes);
+            if (phoneAgeMinutes > cfg.MaxPhoneAgeMinutes)
+                continue;
+
+            var distanceKm = GeoDistance.HaversineKm(
+                latitude,
+                longitude,
+                phonePoint.Latitude.Value,
+                phonePoint.Longitude.Value);
+
+            if (nearest == null || distanceKm < nearest.DistanceKm)
+            {
+                nearest = new PhoneReference(
+                    phoneId,
+                    phonePoint,
+                    distanceKm,
+                    phoneAgeMinutes);
+            }
+        }
+
+        return nearest;
+    }
+
+    private sealed record PhoneReference(
+        string DeviceId,
+        TelemetryPoint Point,
+        double DistanceKm,
+        double AgeMinutes);
 
     private double CalculateAllowedDistanceKm(
         double trackerSpeedKmh,
