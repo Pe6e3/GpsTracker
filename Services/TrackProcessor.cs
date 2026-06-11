@@ -103,7 +103,8 @@ public sealed class TrackProcessor
 
         var combinedPoints = BuildPointsWithContext(normalizedId, rawPoints, lastProcessedRawId, out var reprocessFromRawId);
         var protocol = DeviceRegistry.GetProtocol(normalizedId);
-        var filteredPoints = TrackOutlierFilter.RemoveOutliers(combinedPoints, _settings, protocol);
+        var filteredPoints = TrackSpeedHelper.ApplyDerivedSpeed(
+            TrackOutlierFilter.RemoveOutliers(combinedPoints, _settings, protocol));
         var removedOutliersCount = combinedPoints.Count - filteredPoints.Count;
 
         if (filteredPoints.Count == 0)
@@ -207,7 +208,7 @@ public sealed class TrackProcessor
             TimestampUtc = lastRawPoint.GpsTimeUtc,
             Latitude = lastRawPoint.Latitude,
             Longitude = lastRawPoint.Longitude,
-            SpeedKmh = lastRawPoint.SpeedKmh,
+            SpeedKmh = 0,
             Course = lastRawPoint.Direction,
             Altitude = lastRawPoint.Altitude,
             Accuracy = lastRawPoint.Accuracy,

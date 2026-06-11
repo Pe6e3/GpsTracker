@@ -22,7 +22,11 @@ public static class TrackSegmentProcessor
         string batchId,
         DateTime createdAtUtc)
     {
-        if (filteredPoints.Count == 0)
+        var points = filteredPoints
+            .Where(p => p.Latitude.HasValue && p.Longitude.HasValue)
+            .ToArray();
+
+        if (points.Length == 0)
         {
             return new ProcessingResult
             {
@@ -32,14 +36,14 @@ public static class TrackSegmentProcessor
             };
         }
 
-        if (CanUseWholeBatchStationary(filteredPoints, settings)
-            && IsStationaryRange(filteredPoints, 0, filteredPoints.Count - 1, settings))
+        if (CanUseWholeBatchStationary(points, settings)
+            && IsStationaryRange(points, 0, points.Length - 1, settings))
         {
             return new ProcessingResult
             {
                 TrackPoints = CreateStationaryPoints(
                     deviceId,
-                    filteredPoints,
+                    points,
                     settings,
                     batchId,
                     createdAtUtc,
@@ -49,14 +53,27 @@ public static class TrackSegmentProcessor
             };
         }
 
-        var averageSpeed = filteredPoints.Average(p => p.SpeedKmh);
-        if (averageSpeed > settings.StationaryMaxAverageSpeedKmh)
+        var averageSpeed = points.Average(p => p.SpeedKmh);
+        var hasStationarySegment = FindNextStationaryStart(points, 0, settings).HasValue
+            || IsLikelyLongStationary(points, settings);
+
+        if (averageSpeed > settings.StationaryMaxAverageSpeedKmh && !hasStationarySegment)
         {
+            var fastPathPoints = CreateMovingRangePoints(
+                deviceId,
+                points,
+                0,
+                points.Length - 1,
+                settings,
+                batchId,
+                createdAtUtc,
+                out var fastMovingSegments);
+
             return new ProcessingResult
             {
-                TrackPoints = CreateMovingPoints(deviceId, filteredPoints, settings, batchId, createdAtUtc),
-                StationarySegmentsCount = 0,
-                MovingSegmentsCount = 1
+                TrackPoints = fastPathPoints,
+                StationarySegmentsCount = fastPathPoints.Count(p => p.PointType == TrackPointType.StationaryStart),
+                MovingSegmentsCount = fastMovingSegments
             };
         }
 
@@ -65,55 +82,83 @@ public static class TrackSegmentProcessor
         var movingSegments = 0;
         var index = 0;
 
-        while (index < filteredPoints.Count)
+        while (index < points.Length)
         {
-            var stationaryEnd = FindStationaryEnd(filteredPoints, index, settings);
+            var stationaryEnd = FindStationaryEnd(points, index, settings);
             if (stationaryEnd.HasValue)
             {
                 if (index > 0)
-                    TryAddArrivalMovingPoint(output, filteredPoints, index - 1, index, deviceId, batchId, createdAtUtc, settings);
+                    TryAddArrivalMovingPoint(output, points, index - 1, index, deviceId, batchId, createdAtUtc, settings);
 
                 output.AddRange(CreateStationaryPoints(
                     deviceId,
-                    SliceRange(filteredPoints, index, stationaryEnd.Value),
+                    SliceRange(points, index, stationaryEnd.Value),
                     settings,
                     batchId,
                     createdAtUtc,
-                    MovementFollowsAfter(filteredPoints, stationaryEnd.Value, settings)));
+                    MovementFollowsAfter(points, stationaryEnd.Value, settings)));
                 stationarySegments++;
                 index = stationaryEnd.Value + 1;
                 continue;
             }
 
-            var nextStationaryStart = FindNextStationaryStart(filteredPoints, index + 1, settings);
-            var movingEnd = nextStationaryStart.HasValue ? nextStationaryStart.Value - 1 : filteredPoints.Count - 1;
-
-            if (IsStationaryRange(filteredPoints, index, movingEnd, settings))
+            var briefStopEnd = FindBriefStopEnd(points, index, settings);
+            if (briefStopEnd.HasValue)
             {
+                if (index > 0)
+                    TryAddArrivalMovingPoint(output, points, index - 1, index, deviceId, batchId, createdAtUtc, settings);
+
                 output.AddRange(CreateStationaryPoints(
                     deviceId,
-                    SliceRange(filteredPoints, index, movingEnd),
+                    SliceRange(points, index, briefStopEnd.Value),
                     settings,
                     batchId,
                     createdAtUtc,
-                    MovementFollowsAfter(filteredPoints, movingEnd, settings)));
+                    MovementFollowsAfter(points, briefStopEnd.Value, settings)));
+                stationarySegments++;
+                index = briefStopEnd.Value + 1;
+                continue;
+            }
+
+            var nextStationaryStart = FindNextStationaryStart(points, index + 1, settings);
+            var nextBriefStopStart = FindNextBriefStopStart(points, index + 1, settings);
+            var nextBoundary = MinNullableIndex(nextStationaryStart, nextBriefStopStart);
+            var movingEnd = nextBoundary.HasValue ? nextBoundary.Value - 1 : points.Length - 1;
+
+            if (IsStationaryRange(points, index, movingEnd, settings))
+            {
+                output.AddRange(CreateStationaryPoints(
+                    deviceId,
+                    SliceRange(points, index, movingEnd),
+                    settings,
+                    batchId,
+                    createdAtUtc,
+                    MovementFollowsAfter(points, movingEnd, settings)));
                 stationarySegments++;
             }
             else
             {
-                var movingSlice = SliceRange(filteredPoints, index, movingEnd);
-                if (movingSlice.Count > 0)
-                {
-                    output.AddRange(CreateMovingPoints(deviceId, movingSlice, settings, batchId, createdAtUtc));
-                    movingSegments++;
-                }
+                var beforeCount = output.Count;
+                output.AddRange(CreateMovingRangePoints(
+                    deviceId,
+                    points,
+                    index,
+                    movingEnd,
+                    settings,
+                    batchId,
+                    createdAtUtc,
+                    out var rangeMovingSegments));
+                movingSegments += rangeMovingSegments;
+                stationarySegments += output
+                    .Skip(beforeCount)
+                    .Count(p => p.PointType == TrackPointType.StationaryStart);
 
-                if (nextStationaryStart.HasValue)
+                if (nextBoundary.HasValue)
                     TryAddArrivalMovingPoint(
                         output,
-                        filteredPoints,
+                        points,
                         movingEnd,
-                        nextStationaryStart.Value,
+                        nextBoundary.Value,
                         deviceId,
                         batchId,
                         createdAtUtc,
@@ -413,6 +458,187 @@ public static class TrackSegmentProcessor
         return lastValidEnd;
     }
 
+    private static int? FindNextBriefStopStart(
+        IReadOnlyList<TelemetryPoint> points,
+        int startIndex,
+        TrackProcessingSettings settings,
+        int? maxIndex = null)
+    {
+        var limit = maxIndex ?? points.Count - 1;
+        for (var index = startIndex; index <= limit; index++)
+        {
+            if (FindBriefStopEnd(points, index, settings, limit).HasValue)
+                return index;
+        }
+
+        return null;
+    }
+
+    private static int? FindBriefStopEnd(
+        IReadOnlyList<TelemetryPoint> points,
+        int startIndex,
+        TrackProcessingSettings settings,
+        int? maxIndex = null)
+    {
+        var upperBound = maxIndex ?? points.Count - 1;
+        if (startIndex > upperBound)
+            return null;
+
+        int? lastValidEnd = null;
+        var firstPossibleEnd = startIndex + settings.BriefStopMinPoints - 1;
+        if (firstPossibleEnd > upperBound)
+            return null;
+
+        for (var endIndex = firstPossibleEnd; endIndex <= upperBound; endIndex++)
+        {
+            if (!IsBriefStopRange(points, startIndex, endIndex, settings))
+            {
+                if (lastValidEnd.HasValue)
+                    break;
+
+                continue;
+            }
+
+            lastValidEnd = endIndex;
+        }
+
+        return lastValidEnd;
+    }
+
+    private static bool IsBriefStopRange(
+        IReadOnlyList<TelemetryPoint> points,
+        int startIndex,
+        int endIndex,
+        TrackProcessingSettings settings)
+    {
+        var count = endIndex - startIndex + 1;
+        if (count < settings.BriefStopMinPoints)
+            return false;
+
+        var durationSeconds = (points[endIndex].GpsTimeUtc - points[startIndex].GpsTimeUtc).TotalSeconds;
+        if (durationSeconds < settings.BriefStopMinDurationSeconds)
+            return false;
+
+        if (durationSeconds > settings.BriefStopMaxDurationMinutes * 60)
+            return false;
+
+        var speedSum = 0.0;
+        var maxSpeed = 0.0;
+        var fastPoints = 0;
+        for (var index = startIndex; index <= endIndex; index++)
+        {
+            if (!points[index].Latitude.HasValue || !points[index].Longitude.HasValue)
+                return false;
+
+            var speed = points[index].SpeedKmh;
+            speedSum += speed;
+            if (speed > maxSpeed)
+                maxSpeed = speed;
+            if (speed > settings.BriefStopMaxAverageSpeedKmh)
+                fastPoints++;
+        }
+
+        if (speedSum / count > settings.BriefStopMaxAverageSpeedKmh)
+            return false;
+
+        if (maxSpeed > settings.BriefStopMaxPeakSpeedKmh)
+            return false;
+
+        if (fastPoints >= settings.BriefStopMinPoints)
+            return false;
+
+        var center = ComputeStationaryCenter(points, startIndex, endIndex);
+        var radiusMeters = ComputeStationaryRadius(points, startIndex, endIndex, center);
+
+        return radiusMeters <= settings.BriefStopRadiusMeters;
+    }
+
+    private static int? MinNullableIndex(int? left, int? right)
+    {
+        if (!left.HasValue)
+            return right;
+        if (!right.HasValue)
+            return left;
+
+        return Math.Min(left.Value, right.Value);
+    }
+
+    private static IReadOnlyList<ProcessedTrackPoint> CreateMovingRangePoints(
+        string deviceId,
+        IReadOnlyList<TelemetryPoint> points,
+        int startIndex,
+        int endIndex,
+        TrackProcessingSettings settings,
+        string batchId,
+        DateTime createdAtUtc,
+        out int movingSegmentCount)
+    {
+        movingSegmentCount = 0;
+        var output = new List<ProcessedTrackPoint>();
+        if (startIndex > endIndex)
+            return output;
+
+        var index = startIndex;
+        while (index <= endIndex)
+        {
+            var briefStopEnd = FindBriefStopEnd(points, index, settings, endIndex);
+            if (briefStopEnd.HasValue)
+            {
+                output.AddRange(CreateStationaryPoints(
+                    deviceId,
+                    SliceRange(points, index, briefStopEnd.Value),
+                    settings,
+                    batchId,
+                    createdAtUtc,
+                    briefStopEnd.Value < endIndex || MovementFollowsAfter(points, briefStopEnd.Value, settings)));
+                index = briefStopEnd.Value + 1;
+                continue;
+            }
+
+            var nextBriefStopStart = FindNextBriefStopStart(points, index + 1, settings, endIndex);
+            var sliceEnd = nextBriefStopStart.HasValue ? nextBriefStopStart.Value - 1 : endIndex;
+            var movingSlice = SliceRange(points, index, sliceEnd);
+            if (movingSlice.Count > 0)
+            {
+                output.AddRange(CreateMovingPoints(deviceId, movingSlice, settings, batchId, createdAtUtc));
+                movingSegmentCount++;
+            }
+
+            index = sliceEnd + 1;
+        }
+
+        return output;
+    }
+
+    private static bool IsLikelyLongStationary(
+        IReadOnlyList<TelemetryPoint> points,
+        TrackProcessingSettings settings)
+    {
+        if (points.Count < settings.StationaryMinPoints)
+            return false;
+
+        var durationMinutes = (points[^1].GpsTimeUtc - points[0].GpsTimeUtc).TotalMinutes;
+        if (durationMinutes < settings.StationaryMinDurationMinutes)
+            return false;
+
+        var totalDistanceMeters = 0d;
+        for (var index = 1; index < points.Count; index++)
+        {
+            var previous = points[index - 1];
+            var current = points[index];
+            if (!HasCoordinates(previous, current))
+                continue;
+
+            totalDistanceMeters += GeoDistance.HaversineMeters(
+                previous.Latitude!.Value,
+                previous.Longitude!.Value,
+                current.Latitude!.Value,
+                current.Longitude!.Value);
+        }
+
+        return totalDistanceMeters <= Math.Max(500, settings.StationaryRadiusMeters * 4);
+    }
+
     private static bool IsStationaryRange(
         IReadOnlyList<TelemetryPoint> points,
         int startIndex,
@@ -432,6 +658,9 @@ public static class TrackSegmentProcessor
         var fastPoints = 0;
         for (var index = startIndex; index <= endIndex; index++)
         {
+            if (!points[index].Latitude.HasValue || !points[index].Longitude.HasValue)
+                return false;
+
             var speed = points[index].SpeedKmh;
             speedSum += speed;
             if (speed > maxSpeed)
@@ -774,6 +1003,12 @@ public static class TrackSegmentProcessor
         if (Math.Abs(current.SpeedKmh - previous.SpeedKmh) >= PreserveSpeedDeltaKmh)
             return true;
 
+        if (current.SpeedKmh <= 3 && previous.SpeedKmh > 5)
+            return true;
+
+        if (current.SpeedKmh <= 1)
+            return true;
+
         if (HasCoordinates(previous, current, next))
         {
             var courseDelta = CourseDelta(previous.Direction, current.Direction);
@@ -860,7 +1095,7 @@ public static class TrackSegmentProcessor
             TimestampUtc = timestampUtc ?? source.GpsTimeUtc,
             Latitude = latitude,
             Longitude = longitude,
-            SpeedKmh = speedKmh ?? source.SpeedKmh,
+            SpeedKmh = speedKmh ?? 0,
             Course = source.Direction,
             Altitude = source.Altitude,
             Accuracy = source.Accuracy,

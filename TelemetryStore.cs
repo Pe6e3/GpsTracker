@@ -152,7 +152,7 @@ public sealed class TelemetryStore : IDisposable
             command.Parameters.AddWithValue("$latitude", latitude.HasValue ? latitude.Value : DBNull.Value);
             command.Parameters.AddWithValue("$longitude", longitude.HasValue ? longitude.Value : DBNull.Value);
             command.Parameters.AddWithValue("$altitude", location.Altitude ?? 0);
-            command.Parameters.AddWithValue("$speed_kmh", location.VelocityKmh ?? 0);
+            command.Parameters.AddWithValue("$speed_kmh", 0);
             command.Parameters.AddWithValue("$direction", location.Course ?? 0);
             command.Parameters.AddWithValue("$gps_time_utc", FormatUtc(gpsTimeUtc));
             command.Parameters.AddWithValue("$received_at_utc", FormatUtc(receivedAtUtc));
@@ -171,11 +171,22 @@ public sealed class TelemetryStore : IDisposable
         string deviceId,
         double latitude,
         double longitude,
-        double speedKmh,
         DateTime gpsTimeUtc,
         string geofenceNamesJson)
     {
-        _theftDetectionService?.Analyze(deviceId, latitude, longitude, speedKmh, gpsTimeUtc, geofenceNamesJson);
+        if (_theftDetectionService == null)
+            return;
+
+        var previous = GetLastPointBefore(deviceId, gpsTimeUtc);
+        var current = new TelemetryPoint
+        {
+            Latitude = latitude,
+            Longitude = longitude,
+            GpsTimeUtc = gpsTimeUtc,
+            SpeedKmh = 0
+        };
+        var speedKmh = TrackSpeedHelper.CalculateSpeedKmh(previous, current, null);
+        _theftDetectionService.Analyze(deviceId, latitude, longitude, speedKmh, gpsTimeUtc, geofenceNamesJson);
     }
 
     private static void EnsureNullableCoordinates(SqliteConnection connection)
@@ -350,7 +361,7 @@ public sealed class TelemetryStore : IDisposable
             command.Parameters.AddWithValue("$latitude", location.Latitude);
             command.Parameters.AddWithValue("$longitude", location.Longitude);
             command.Parameters.AddWithValue("$altitude", location.Altitude);
-            command.Parameters.AddWithValue("$speed_kmh", location.SpeedKmh);
+            command.Parameters.AddWithValue("$speed_kmh", 0);
             command.Parameters.AddWithValue("$direction", location.Direction);
             command.Parameters.AddWithValue("$gps_time_utc", FormatUtc(gpsTimeUtc));
             command.Parameters.AddWithValue("$received_at_utc", FormatUtc(receivedAtUtc));
@@ -361,7 +372,7 @@ public sealed class TelemetryStore : IDisposable
             command.ExecuteNonQuery();
         }
 
-        AnalyzeTheft(deviceId, location.Latitude, location.Longitude, location.SpeedKmh, gpsTimeUtc, geofenceNamesJson);
+        AnalyzeTheft(deviceId, location.Latitude, location.Longitude, gpsTimeUtc, geofenceNamesJson);
     }
 
     public void SaveGt06Location(string? deviceLabel, Gt06Message message)
@@ -425,7 +436,7 @@ public sealed class TelemetryStore : IDisposable
             command.Parameters.AddWithValue("$latitude", location.Latitude);
             command.Parameters.AddWithValue("$longitude", location.Longitude);
             command.Parameters.AddWithValue("$altitude", 0);
-            command.Parameters.AddWithValue("$speed_kmh", location.SpeedKmh);
+            command.Parameters.AddWithValue("$speed_kmh", 0);
             command.Parameters.AddWithValue("$direction", location.Direction);
             command.Parameters.AddWithValue("$gps_time_utc", FormatUtc(gpsTimeUtc));
             command.Parameters.AddWithValue("$received_at_utc", FormatUtc(receivedAtUtc));
@@ -436,7 +447,7 @@ public sealed class TelemetryStore : IDisposable
             command.ExecuteNonQuery();
         }
 
-        AnalyzeTheft(deviceId, location.Latitude, location.Longitude, location.SpeedKmh, gpsTimeUtc, geofenceNamesJson);
+        AnalyzeTheft(deviceId, location.Latitude, location.Longitude, gpsTimeUtc, geofenceNamesJson);
     }
 
     public TelemetryPoint? GetLatestPosition(string deviceId, double? maxAccuracyMeters = null)
@@ -489,7 +500,7 @@ public sealed class TelemetryStore : IDisposable
             if (!reader.Read())
                 return null;
 
-            return new TelemetryPoint
+            var point = new TelemetryPoint
             {
                 Id = reader.GetInt64(0),
                 DeviceId = reader.GetString(1),
@@ -497,7 +508,7 @@ public sealed class TelemetryStore : IDisposable
                 Latitude = reader.IsDBNull(3) ? null : reader.GetDouble(3),
                 Longitude = reader.IsDBNull(4) ? null : reader.GetDouble(4),
                 Altitude = reader.GetInt32(5),
-                SpeedKmh = reader.GetDouble(6),
+                SpeedKmh = 0,
                 Direction = reader.GetInt32(7),
                 GpsTimeUtc = ParseUtc(reader.GetString(8)),
                 ReceivedAtUtc = ParseUtc(reader.GetString(9)),
@@ -505,6 +516,26 @@ public sealed class TelemetryStore : IDisposable
                 Geofences = GeofenceStore.DeserializeNames(reader.IsDBNull(11) ? null : reader.GetString(11)),
                 Battery = reader.IsDBNull(12) ? null : reader.GetInt32(12)
             };
+
+            var previous = ReadLastPointBefore(connection, normalizedId, point.GpsTimeUtc);
+            point = new TelemetryPoint
+            {
+                Id = point.Id,
+                DeviceId = point.DeviceId,
+                DeviceName = point.DeviceName,
+                Latitude = point.Latitude,
+                Longitude = point.Longitude,
+                Altitude = point.Altitude,
+                SpeedKmh = TrackSpeedHelper.CalculateSpeedKmh(previous, point, null),
+                Direction = point.Direction,
+                GpsTimeUtc = point.GpsTimeUtc,
+                ReceivedAtUtc = point.ReceivedAtUtc,
+                Accuracy = point.Accuracy,
+                Geofences = point.Geofences,
+                Battery = point.Battery
+            };
+
+            return point;
         }
     }
 
@@ -805,6 +836,69 @@ public sealed class TelemetryStore : IDisposable
 
             return points;
         }
+    }
+
+    public TelemetryPoint? GetLastPointBefore(string deviceId, DateTime beforeUtc)
+    {
+        var normalizedId = DeviceRegistry.NormalizeId(deviceId);
+        if (string.IsNullOrEmpty(normalizedId))
+            return null;
+
+        lock (_lock)
+        {
+            using var connection = OpenConnection();
+            return ReadLastPointBefore(connection, normalizedId, beforeUtc);
+        }
+    }
+
+    private static TelemetryPoint? ReadLastPointBefore(
+        SqliteConnection connection,
+        string normalizedId,
+        DateTime beforeUtc)
+    {
+        using var command = connection.CreateCommand();
+        command.CommandText = """
+            SELECT
+                id,
+                device_id,
+                device_name,
+                latitude,
+                longitude,
+                altitude,
+                speed_kmh,
+                direction,
+                gps_time_utc,
+                received_at_utc,
+                accuracy,
+                geofence_names
+            FROM telemetry_points
+            WHERE device_id = $device_id
+              AND gps_time_utc < $before_utc
+            ORDER BY gps_time_utc DESC, id DESC
+            LIMIT 1;
+            """;
+        command.Parameters.AddWithValue("$device_id", normalizedId);
+        command.Parameters.AddWithValue("$before_utc", FormatUtc(beforeUtc));
+
+        using var reader = command.ExecuteReader();
+        if (!reader.Read())
+            return null;
+
+        return new TelemetryPoint
+        {
+            Id = reader.GetInt64(0),
+            DeviceId = reader.GetString(1),
+            DeviceName = reader.IsDBNull(2) ? null : reader.GetString(2),
+            Latitude = reader.IsDBNull(3) ? null : reader.GetDouble(3),
+            Longitude = reader.IsDBNull(4) ? null : reader.GetDouble(4),
+            Altitude = reader.GetInt32(5),
+            SpeedKmh = 0,
+            Direction = reader.GetInt32(7),
+            GpsTimeUtc = ParseUtc(reader.GetString(8)),
+            ReceivedAtUtc = ParseUtc(reader.GetString(9)),
+            Accuracy = reader.IsDBNull(10) ? null : reader.GetDouble(10),
+            Geofences = GeofenceStore.DeserializeNames(reader.IsDBNull(11) ? null : reader.GetString(11))
+        };
     }
 
     public long GetDatabaseSizeBytes()

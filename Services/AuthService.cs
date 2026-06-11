@@ -17,12 +17,19 @@ public sealed class AuthService
 
     public LoginResponse? Login(LoginRequest request)
     {
-        if (!string.Equals(request.Username, _settings.AuthUsername, StringComparison.Ordinal) ||
-            !string.Equals(request.Password, _settings.AuthPassword, StringComparison.Ordinal))
+        string? username = null;
+
+        if (UserRegistry.TryValidate(request.Username, request.Password, out var normalizedUsername))
+            username = normalizedUsername;
+        else if (string.Equals(request.Username, _settings.AuthUsername, StringComparison.Ordinal) &&
+                 string.Equals(request.Password, _settings.AuthPassword, StringComparison.Ordinal))
+            username = request.Username.Trim();
+
+        if (string.IsNullOrEmpty(username))
             return null;
 
         var expiresAtUtc = DateTime.UtcNow.AddHours(_settings.JwtExpireHours);
-        var token = CreateToken(request.Username, expiresAtUtc);
+        var token = CreateToken(username, expiresAtUtc);
 
         return new LoginResponse
         {

@@ -10,7 +10,7 @@ echo "==> Publish Release..."
 dotnet publish "$ROOT/GpsTcpProxy.csproj" -c Release -o "$PUBLISH" --no-self-contained
 
 echo "==> Copy config..."
-for f in appsettings.json devices.json; do
+for f in appsettings.json devices.json users.json; do
   if [[ -f "$ROOT/$f" ]]; then
     cp "$ROOT/$f" "$PUBLISH/$f"
   else

@@ -17,6 +17,12 @@ public sealed class TrackProcessingSettings
     public double ReturnDistanceMeters { get; set; } = 100;
     public int JumpTimeSeconds { get; set; } = 120;
     public double DouglasPeuckerToleranceMeters { get; set; } = 20;
+    public int BriefStopMinDurationSeconds { get; set; } = 8;
+    public int BriefStopMaxDurationMinutes { get; set; } = 5;
+    public int BriefStopMinPoints { get; set; } = 2;
+    public double BriefStopRadiusMeters { get; set; } = 60;
+    public double BriefStopMaxAverageSpeedKmh { get; set; } = 4;
+    public double BriefStopMaxPeakSpeedKmh { get; set; } = 12;
     public double VehicleMaxSpeedKmh { get; set; } = 180;
     public double PhoneMaxSpeedKmh { get; set; } = 80;
 }

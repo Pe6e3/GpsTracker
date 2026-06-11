@@ -23,6 +23,8 @@ appsettings.*.json
 !appsettings.example.json
 devices.json
 !devices.example.json
+users.json
+!users.example.json
 
 # Database (SQLite)
 data/

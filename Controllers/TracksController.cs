@@ -21,14 +21,15 @@ public sealed class TracksController : ControllerBase
     public ActionResult<TrackResponse> GetTrack(
         string deviceId,
         [FromQuery] string? from,
-        [FromQuery] string? to)
+        [FromQuery] string? to,
+        [FromQuery] bool raw = false)
     {
         if (!DeviceRegistry.Exists(deviceId))
             return NotFound(new { message = "Устройство не найдено" });
 
         try
         {
-            var track = _trackQueryService.GetTrack(deviceId, from, to);
+            var track = _trackQueryService.GetTrack(deviceId, from, to, raw);
             if (track == null)
                 return NotFound(new { message = "Устройство не найдено" });
 

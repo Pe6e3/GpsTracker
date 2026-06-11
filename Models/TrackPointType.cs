@@ -8,4 +8,6 @@ public static class TrackPointType
     public const string StationaryEnd = "stationary_end";
     public const string Heartbeat = "heartbeat";
     public const string Synthetic = "synthetic";
+    public const string UnknownGapStart = "unknown_gap_start";
+    public const string UnknownGapEnd = "unknown_gap_end";
 }

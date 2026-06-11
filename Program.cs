@@ -22,6 +22,10 @@ AppTime.Configure(settings);
 
 DeviceRegistry.Load(Path.Combine(baseDir, "devices.json"));
 
+UserRegistry.Load(Path.Combine(baseDir, "users.json"));
+
+UserRegistry.LoadFallback(settings.AuthUsername, settings.AuthPassword);
+
 PlatformSerial.Initialize(settings.DatabasePath);
 
 LogFiles.Configure(settings.LogRetentionDays);
