@@ -138,7 +138,9 @@ public sealed class TrackProcessor
 
         if (result.TrackPoints.Count > 0)
         {
-            _trackPointStore.InsertBatch(result.TrackPoints);
+            var batchPoints = result.TrackPoints.ToList();
+            batchPoints.Add(CreateProcessingCheckpoint(normalizedId, rawPoints[^1], createdAtUtc));
+            _trackPointStore.InsertBatch(batchPoints);
             _trackPointStore.MergeAdjacentStationary(normalizedId, _settings);
         }
 

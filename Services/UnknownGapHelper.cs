@@ -57,19 +57,29 @@ public static class UnknownGapHelper
         return result.ToArray();
     }
 
-    private static TrackPointDto CreateUnknownGapEnd(TrackPointDto anchor, TrackPointDto next) =>
-        new()
+    private static TrackPointDto CreateUnknownGapEnd(TrackPointDto anchor, TrackPointDto next)
+    {
+        var useNextCoordinates = next.Lat.HasValue && next.Lon.HasValue &&
+            (!anchor.Lat.HasValue || !anchor.Lon.HasValue ||
+             GeoDistance.HaversineMeters(
+                 anchor.Lat.Value,
+                 anchor.Lon.Value,
+                 next.Lat.Value,
+                 next.Lon.Value) > 50);
+
+        return new()
         {
-            Lat = anchor.Lat,
-            Lon = anchor.Lon,
-            Accuracy = anchor.Accuracy,
-            Alt = anchor.Alt,
+            Lat = useNextCoordinates ? next.Lat : anchor.Lat,
+            Lon = useNextCoordinates ? next.Lon : anchor.Lon,
+            Accuracy = useNextCoordinates ? next.Accuracy : anchor.Accuracy,
+            Alt = useNextCoordinates ? next.Alt : anchor.Alt,
             Speed = 0,
             TimeUtc = next.TimeUtc,
             TimeLocal = next.TimeLocal,
-            Geofences = anchor.Geofences,
+            Geofences = useNextCoordinates ? next.Geofences : anchor.Geofences,
             PointType = TrackPointType.UnknownGapEnd
         };
+    }
 
     private static TrackPointDto CloneWithPointType(TrackPointDto point, string pointType) =>
         new()

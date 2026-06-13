@@ -851,6 +851,167 @@ public sealed class TelemetryStore : IDisposable
         }
     }
 
+    public TelemetryPoint? GetLatestPositionAtOrBefore(
+        string deviceId,
+        DateTime atUtc,
+        double? maxAccuracyMeters = null)
+    {
+        var normalizedId = DeviceRegistry.NormalizeId(deviceId);
+        if (string.IsNullOrEmpty(normalizedId))
+            return null;
+
+        lock (_lock)
+        {
+            using var connection = OpenConnection();
+            using var command = connection.CreateCommand();
+
+            var filters = new List<string>
+            {
+                "device_id = $device_id",
+                "latitude IS NOT NULL",
+                "longitude IS NOT NULL",
+                "gps_time_utc <= $at_utc"
+            };
+            command.Parameters.AddWithValue("$device_id", normalizedId);
+            command.Parameters.AddWithValue("$at_utc", FormatUtc(atUtc));
+
+            if (maxAccuracyMeters.HasValue)
+            {
+                filters.Add("(accuracy IS NULL OR accuracy <= $max_accuracy)");
+                command.Parameters.AddWithValue("$max_accuracy", maxAccuracyMeters.Value);
+            }
+
+            command.CommandText = $"""
+                SELECT
+                    id,
+                    device_id,
+                    device_name,
+                    latitude,
+                    longitude,
+                    altitude,
+                    speed_kmh,
+                    direction,
+                    gps_time_utc,
+                    received_at_utc,
+                    accuracy,
+                    geofence_names
+                FROM telemetry_points
+                WHERE {string.Join(" AND ", filters)}
+                ORDER BY gps_time_utc DESC, id DESC
+                LIMIT 1;
+                """;
+
+            using var reader = command.ExecuteReader();
+            if (!reader.Read())
+                return null;
+
+            var point = ReadTelemetryPoint(reader);
+            var previous = ReadLastPointBefore(connection, normalizedId, point.GpsTimeUtc);
+            return new TelemetryPoint
+            {
+                Id = point.Id,
+                DeviceId = point.DeviceId,
+                DeviceName = point.DeviceName,
+                Latitude = point.Latitude,
+                Longitude = point.Longitude,
+                Altitude = point.Altitude,
+                Accuracy = point.Accuracy,
+                Direction = point.Direction,
+                GpsTimeUtc = point.GpsTimeUtc,
+                ReceivedAtUtc = point.ReceivedAtUtc,
+                Geofences = point.Geofences,
+                Battery = point.Battery,
+                SpeedKmh = TrackSpeedHelper.CalculateSpeedKmh(previous, point, null)
+            };
+        }
+    }
+
+    public TelemetryPoint? GetLastGeofencePointBefore(string deviceId, DateTime beforeUtc)
+    {
+        var normalizedId = DeviceRegistry.NormalizeId(deviceId);
+        if (string.IsNullOrEmpty(normalizedId))
+            return null;
+
+        lock (_lock)
+        {
+            using var connection = OpenConnection();
+            using var command = connection.CreateCommand();
+            command.CommandText = """
+                SELECT
+                    id,
+                    device_id,
+                    device_name,
+                    latitude,
+                    longitude,
+                    altitude,
+                    speed_kmh,
+                    direction,
+                    gps_time_utc,
+                    received_at_utc,
+                    accuracy,
+                    geofence_names
+                FROM telemetry_points
+                WHERE device_id = $device_id
+                  AND gps_time_utc < $before_utc
+                  AND geofence_names IS NOT NULL
+                  AND geofence_names != '[]'
+                  AND geofence_names != ''
+                ORDER BY gps_time_utc DESC, id DESC
+                LIMIT 1;
+                """;
+            command.Parameters.AddWithValue("$device_id", normalizedId);
+            command.Parameters.AddWithValue("$before_utc", FormatUtc(beforeUtc));
+
+            using var reader = command.ExecuteReader();
+            return reader.Read() ? ReadTelemetryPoint(reader) : null;
+        }
+    }
+
+    public double GetMovementDistanceMeters(string deviceId, DateTime toUtc, int windowMinutes)
+    {
+        if (windowMinutes <= 0)
+            return 0;
+
+        var normalizedId = DeviceRegistry.NormalizeId(deviceId);
+        if (string.IsNullOrEmpty(normalizedId))
+            return 0;
+
+        var fromUtc = toUtc.AddMinutes(-windowMinutes);
+        var endPoint = GetLatestPositionAtOrBefore(normalizedId, toUtc);
+        if (endPoint?.Latitude == null || endPoint.Longitude == null)
+            return 0;
+
+        var startPoint = GetLatestPositionAtOrBefore(normalizedId, fromUtc);
+        if (startPoint?.Latitude == null || startPoint.Longitude == null)
+            startPoint = GetLastPointBefore(normalizedId, toUtc);
+
+        if (startPoint?.Latitude == null || startPoint.Longitude == null)
+            return 0;
+
+        return GeoDistance.HaversineMeters(
+            startPoint.Latitude.Value,
+            startPoint.Longitude.Value,
+            endPoint.Latitude.Value,
+            endPoint.Longitude.Value);
+    }
+
+    private static TelemetryPoint ReadTelemetryPoint(SqliteDataReader reader) =>
+        new()
+        {
+            Id = reader.GetInt64(0),
+            DeviceId = reader.GetString(1),
+            DeviceName = reader.IsDBNull(2) ? null : reader.GetString(2),
+            Latitude = reader.IsDBNull(3) ? null : reader.GetDouble(3),
+            Longitude = reader.IsDBNull(4) ? null : reader.GetDouble(4),
+            Altitude = reader.GetInt32(5),
+            SpeedKmh = reader.GetDouble(6),
+            Direction = reader.GetInt32(7),
+            GpsTimeUtc = ParseUtc(reader.GetString(8)),
+            ReceivedAtUtc = ParseUtc(reader.GetString(9)),
+            Accuracy = reader.IsDBNull(10) ? null : reader.GetDouble(10),
+            Geofences = GeofenceStore.DeserializeNames(reader.IsDBNull(11) ? null : reader.GetString(11))
+        };
+
     private static TelemetryPoint? ReadLastPointBefore(
         SqliteConnection connection,
         string normalizedId,

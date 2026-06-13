@@ -108,12 +108,14 @@ public sealed class TrackQueryService
         optimizedDisplay = IncludeUnknownGapAnchor(optimizedDisplay, normalizedId, fromUtc);
         optimizedDisplay = UnknownGapHelper.ApplyUnknownGaps(optimizedDisplay);
 
+        var finalPoints = FilterToTimeRange(optimizedDisplay, fromUtc, toUtc, keepUnknownGapAnchors: true);
+        finalPoints = EnrichGeofencesFromRawTrack(normalizedId, finalPoints, fromUtc, toUtc);
+
         return new TrackResponse
         {
             DeviceId = normalizedId,
             DeviceName = deviceName,
-            Points = TrackSpeedHelper.ApplyDerivedSpeed(
-                FilterToTimeRange(optimizedDisplay, fromUtc, toUtc, keepUnknownGapAnchors: true))
+            Points = TrackSpeedHelper.ApplyDerivedSpeed(finalPoints)
         };
     }
 
@@ -461,6 +463,102 @@ public sealed class TrackQueryService
 
         return unified;
     }
+
+    private TrackPointDto[] EnrichGeofencesFromRawTrack(
+        string deviceId,
+        TrackPointDto[] points,
+        DateTime fromUtc,
+        DateTime toUtc)
+    {
+        if (points.Length == 0)
+            return points;
+
+        var lookbackUtc = fromUtc.AddHours(-Math.Max(1, _trackProcessingSettings.MaxStationarySegmentHours));
+        if (TryParseDisplayTimeUtc(points[0].TimeUtc, out var firstUtc) && firstUtc < fromUtc)
+            lookbackUtc = firstUtc.AddHours(-1);
+
+        var rawPoints = _telemetryStore.GetTrack(deviceId, lookbackUtc, toUtc);
+        if (rawPoints.Count == 0)
+            return points;
+
+        var enriched = new TrackPointDto[points.Length];
+        for (var index = 0; index < points.Length; index++)
+        {
+            var point = points[index];
+            if (point.Geofences.Length > 0)
+            {
+                enriched[index] = point;
+                continue;
+            }
+
+            if (!TryParseDisplayTimeUtc(point.TimeUtc, out var pointUtc))
+            {
+                enriched[index] = point;
+                continue;
+            }
+
+            var geofences = ResolveGeofencesFromRaw(point, pointUtc, rawPoints);
+            enriched[index] = geofences.Length == 0
+                ? point
+                : CloneTrackPointWithGeofences(point, geofences);
+        }
+
+        return enriched;
+    }
+
+    private static string[] ResolveGeofencesFromRaw(
+        TrackPointDto point,
+        DateTime pointUtc,
+        IReadOnlyList<TelemetryPoint> rawPoints)
+    {
+        TelemetryPoint? best = null;
+        var bestDeltaSeconds = double.MaxValue;
+
+        foreach (var raw in rawPoints)
+        {
+            if (raw.Geofences.Count == 0)
+                continue;
+
+            var deltaSeconds = Math.Abs((raw.GpsTimeUtc - pointUtc).TotalSeconds);
+            if (deltaSeconds > 180)
+                continue;
+
+            if (point.Lat.HasValue && point.Lon.HasValue &&
+                raw.Latitude.HasValue && raw.Longitude.HasValue)
+            {
+                var distanceMeters = GeoDistance.HaversineMeters(
+                    point.Lat.Value,
+                    point.Lon.Value,
+                    raw.Latitude.Value,
+                    raw.Longitude.Value);
+
+                if (distanceMeters > 250 && deltaSeconds > 60)
+                    continue;
+            }
+
+            if (deltaSeconds < bestDeltaSeconds)
+            {
+                bestDeltaSeconds = deltaSeconds;
+                best = raw;
+            }
+        }
+
+        return best == null ? Array.Empty<string>() : best.Geofences.ToArray();
+    }
+
+    private static TrackPointDto CloneTrackPointWithGeofences(TrackPointDto point, string[] geofences) =>
+        new()
+        {
+            Lat = point.Lat,
+            Lon = point.Lon,
+            Accuracy = point.Accuracy,
+            Alt = point.Alt,
+            Speed = point.Speed,
+            TimeUtc = point.TimeUtc,
+            TimeLocal = point.TimeLocal,
+            Geofences = geofences,
+            PointType = point.PointType
+        };
 
     private static TrackPointDto CloneTrackPoint(TrackPointDto point, double latitude, double longitude) =>
         new()

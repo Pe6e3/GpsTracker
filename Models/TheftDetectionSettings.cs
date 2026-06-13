@@ -87,4 +87,22 @@ public sealed class TheftDetectionSettings
 
     /// <summary>Минимальный интервал между тревогами по одному устройству, мин.</summary>
     public int AlertCooldownMinutes { get; set; } = 30;
+
+    /// <summary>Не тревожить после совместного выезда из геозоны, мин.</summary>
+    public int DepartureGraceMinutes { get; set; } = 20;
+
+    /// <summary>Окно для определения недавнего перемещения трекера, мин.</summary>
+    public int RecentMovementWindowMinutes { get; set; } = 6;
+
+    /// <summary>Если трекер сместился дальше этого за окно — считаем поездкой, м.</summary>
+    public double RecentMovementDistanceMeters { get; set; } = 250;
+
+    /// <summary>Строгий порог StationaryMaxKm только если телефон обновлялся недавно, мин.</summary>
+    public int MinPhoneFreshnessForStationaryCapMinutes { get; set; } = 3;
+
+    /// <summary>Дополнительный допуск за каждую минуту отставания телефона при поездке, км.</summary>
+    public double MovingLagTolerancePerMinuteKm { get; set; } = 0.15;
+
+    /// <summary>Максимальный допуск при поездке с отстающим телефоном, км.</summary>
+    public double MovingLagMaxKm { get; set; } = 2.0;
 }

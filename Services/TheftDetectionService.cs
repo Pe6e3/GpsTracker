@@ -48,7 +48,25 @@ public sealed class TheftDetectionService
             return;
         }
 
-        var phoneReference = FindNearestPhoneReference(latitude, longitude, gpsTimeUtc);
+        var store = GetTelemetryStore();
+        var recentMovementMeters = store.GetMovementDistanceMeters(
+            normalizedId,
+            gpsTimeUtc,
+            cfg.RecentMovementWindowMinutes);
+
+        if (IsCoordinatedDeparture(store, normalizedId, gpsTimeUtc, recentMovementMeters, cfg))
+        {
+            _suspiciousCounts.TryRemove(normalizedId, out _);
+            return;
+        }
+
+        var phoneReference = FindNearestPhoneReference(
+            store,
+            latitude,
+            longitude,
+            gpsTimeUtc,
+            cfg,
+            _settings.Mqtt.MaxTrackAccuracyMeters);
         if (phoneReference == null)
             return;
 
@@ -56,8 +74,17 @@ public sealed class TheftDetectionService
         var phoneId = phoneReference.DeviceId;
         var phoneAgeMinutes = phoneReference.AgeMinutes;
         var distanceKm = phoneReference.DistanceKm;
+        var trackerIsMoving = IsTrackerMoving(speedKmh, recentMovementMeters, cfg);
 
-        var allowedKm = CalculateAllowedDistanceKm(speedKmh, phonePoint.SpeedKmh, phoneAgeMinutes, distanceKm);
+        var allowedKm = CalculateAllowedDistanceKm(
+            speedKmh,
+            phonePoint.SpeedKmh,
+            phoneAgeMinutes,
+            distanceKm,
+            recentMovementMeters,
+            trackerIsMoving,
+            cfg);
+
         var isCritical = distanceKm >= cfg.CriticalDistanceKm;
 
         if (!isCritical && distanceKm <= allowedKm)
@@ -87,7 +114,8 @@ public sealed class TheftDetectionService
         TrafficLogger.LogInfo(
             $"[THEFT] {FormatLabel(normalizedId, deviceName)}: вне геозоны, " +
             $"расстояние до {FormatLabel(phoneId, phoneName)} = {distanceKm:F2} км " +
-            $"(допуск {allowedKm:F2} км, скорость {speedKmh:F0}/{phonePoint.SpeedKmh:F0} км/ч)");
+            $"(допуск {allowedKm:F2} км, скорость {speedKmh:F0}/{phonePoint.SpeedKmh:F0} км/ч, " +
+            $"отставание телефона {phoneAgeMinutes:F0} мин, смещение {recentMovementMeters:F0} м)");
 
         _telegramService.NotifyTheftAlert(
             normalizedId,
@@ -104,19 +132,76 @@ public sealed class TheftDetectionService
             gpsTimeLocal);
     }
 
-    private PhoneReference? FindNearestPhoneReference(
+    private static bool IsCoordinatedDeparture(
+        TelemetryStore store,
+        string trackerId,
+        DateTime gpsTimeUtc,
+        double recentMovementMeters,
+        TheftDetectionSettings cfg)
+    {
+        if (recentMovementMeters < cfg.RecentMovementDistanceMeters)
+            return false;
+
+        var lastTrackerGeofence = store.GetLastGeofencePointBefore(trackerId, gpsTimeUtc);
+        if (lastTrackerGeofence == null)
+            return false;
+
+        var minutesSinceExit = (gpsTimeUtc - lastTrackerGeofence.GpsTimeUtc).TotalMinutes;
+        if (minutesSinceExit > cfg.DepartureGraceMinutes)
+            return false;
+
+        foreach (var phoneId in cfg.GetPhoneDeviceIds())
+        {
+            var phonePoint = store.GetLatestPositionAtOrBefore(phoneId, gpsTimeUtc);
+            if (phonePoint?.Latitude == null || phonePoint.Longitude == null)
+                continue;
+
+            if (SharesGeofence(lastTrackerGeofence.Geofences, phonePoint.Geofences))
+                return true;
+
+            var lastPhoneGeofence = store.GetLastGeofencePointBefore(phoneId, gpsTimeUtc);
+            if (lastPhoneGeofence != null &&
+                SharesGeofence(lastTrackerGeofence.Geofences, lastPhoneGeofence.Geofences))
+                return true;
+        }
+
+        return false;
+    }
+
+    private static bool SharesGeofence(
+        IReadOnlyList<string> left,
+        IReadOnlyList<string> right)
+    {
+        if (left.Count == 0 || right.Count == 0)
+            return false;
+
+        var rightSet = new HashSet<string>(right, StringComparer.OrdinalIgnoreCase);
+        return left.Any(name => rightSet.Contains(name));
+    }
+
+    private static bool IsTrackerMoving(
+        double speedKmh,
+        double recentMovementMeters,
+        TheftDetectionSettings cfg) =>
+        speedKmh >= cfg.MovingSpeedThresholdKmh ||
+        recentMovementMeters >= cfg.RecentMovementDistanceMeters;
+
+    private static PhoneReference? FindNearestPhoneReference(
+        TelemetryStore store,
         double latitude,
         double longitude,
-        DateTime gpsTimeUtc)
+        DateTime gpsTimeUtc,
+        TheftDetectionSettings cfg,
+        double maxTrackAccuracyMeters)
     {
-        var cfg = _settings.TheftDetection;
         PhoneReference? nearest = null;
 
         foreach (var phoneId in cfg.GetPhoneDeviceIds())
         {
-            var phonePoint = GetTelemetryStore().GetLatestPosition(
+            var phonePoint = store.GetLatestPositionAtOrBefore(
                 phoneId,
-                _settings.Mqtt.MaxTrackAccuracyMeters);
+                gpsTimeUtc,
+                maxTrackAccuracyMeters);
 
             if (phonePoint?.Latitude == null || phonePoint.Longitude == null)
                 continue;
@@ -150,14 +235,15 @@ public sealed class TheftDetectionService
         double DistanceKm,
         double AgeMinutes);
 
-    private double CalculateAllowedDistanceKm(
+    private static double CalculateAllowedDistanceKm(
         double trackerSpeedKmh,
         double phoneSpeedKmh,
         double phoneAgeMinutes,
-        double actualDistanceKm)
+        double actualDistanceKm,
+        double recentMovementMeters,
+        bool trackerIsMoving,
+        TheftDetectionSettings cfg)
     {
-        var cfg = _settings.TheftDetection;
-
         if (trackerSpeedKmh >= cfg.MovingSpeedThresholdKmh &&
             phoneSpeedKmh >= cfg.MovingSpeedThresholdKmh &&
             actualDistanceKm <= cfg.TogetherMovingMaxKm)
@@ -168,10 +254,22 @@ public sealed class TheftDetectionService
         if (phoneAgeMinutes > 0)
             allowed += phoneAgeMinutes * cfg.GpsLagTolerancePerMinuteKm;
 
-        if (trackerSpeedKmh < 5 && phoneSpeedKmh < 5)
+        if (trackerIsMoving)
+        {
+            allowed += recentMovementMeters / 1000d * 0.35;
+            if (phoneAgeMinutes > 0)
+                allowed += phoneAgeMinutes * cfg.MovingLagTolerancePerMinuteKm;
+
+            allowed = Math.Min(Math.Max(allowed, cfg.TogetherMovingMaxKm), cfg.MovingLagMaxKm);
+        }
+        else if (trackerSpeedKmh < 5 &&
+                 phoneSpeedKmh < 5 &&
+                 phoneAgeMinutes <= cfg.MinPhoneFreshnessForStationaryCapMinutes)
             allowed = Math.Min(allowed, cfg.StationaryMaxKm);
 
-        if (trackerSpeedKmh >= cfg.MovingSpeedThresholdKmh && phoneSpeedKmh < 5)
+        if (trackerSpeedKmh >= cfg.MovingSpeedThresholdKmh &&
+            phoneSpeedKmh < 5 &&
+            !trackerIsMoving)
             allowed = Math.Min(allowed, cfg.BaseDistanceKm);
 
         return allowed;

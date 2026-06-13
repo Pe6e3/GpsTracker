@@ -37,7 +37,8 @@ public static class TrackSegmentProcessor
         }
 
         if (CanUseWholeBatchStationary(points, settings)
-            && IsStationaryRange(points, 0, points.Length - 1, settings))
+            && IsStationaryRange(points, 0, points.Length - 1, settings)
+            && !HasTrailingMovement(points, settings))
         {
             return new ProcessingResult
             {
@@ -306,6 +307,25 @@ public static class TrackSegmentProcessor
 
         var durationHours = (points[^1].GpsTimeUtc - points[0].GpsTimeUtc).TotalHours;
         return durationHours <= 24;
+    }
+
+    private static bool HasTrailingMovement(
+        IReadOnlyList<TelemetryPoint> points,
+        TrackProcessingSettings settings)
+    {
+        var scanWindow = Math.Min(points.Count, Math.Max(settings.StationaryMinPoints * 4, 20));
+        var startIndex = Math.Max(0, points.Count - scanWindow);
+
+        for (var index = startIndex; index <= points.Count - settings.StationaryMinPoints; index++)
+        {
+            if (FindBriefStopEnd(points, index, settings, points.Count - 1).HasValue)
+                continue;
+
+            if (!IsStationaryRange(points, index, points.Count - 1, settings))
+                return true;
+        }
+
+        return false;
     }
 
     private static IReadOnlyList<TelemetryPoint> SliceRange(
