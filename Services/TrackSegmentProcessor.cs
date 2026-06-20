@@ -947,7 +947,7 @@ public static class TrackSegmentProcessor
         DateTime createdAtUtc)
     {
         var simplified = settings.DouglasPeuckerToleranceMeters > 0
-            ? SimplifyMovingPoints(points, settings.DouglasPeuckerToleranceMeters)
+            ? SimplifyMovingPoints(points, settings.DouglasPeuckerToleranceMeters, settings)
             : points;
 
         var result = new List<ProcessedTrackPoint>(simplified.Count);
@@ -979,7 +979,8 @@ public static class TrackSegmentProcessor
 
     private static IReadOnlyList<TelemetryPoint> SimplifyMovingPoints(
         IReadOnlyList<TelemetryPoint> points,
-        double toleranceMeters)
+        double toleranceMeters,
+        TrackProcessingSettings settings)
     {
         if (points.Count <= 2)
             return points;
@@ -988,7 +989,7 @@ public static class TrackSegmentProcessor
 
         for (var index = 1; index < points.Count - 1; index++)
         {
-            if (ShouldPreservePoint(points, index))
+            if (ShouldPreservePoint(points, index, settings))
                 preserved.Add(index);
         }
 
@@ -1010,7 +1011,10 @@ public static class TrackSegmentProcessor
             .ToArray();
     }
 
-    private static bool ShouldPreservePoint(IReadOnlyList<TelemetryPoint> points, int index)
+    private static bool ShouldPreservePoint(
+        IReadOnlyList<TelemetryPoint> points,
+        int index,
+        TrackProcessingSettings settings)
     {
         var current = points[index];
         var previous = points[index - 1];
@@ -1033,6 +1037,14 @@ public static class TrackSegmentProcessor
         {
             var courseDelta = CourseDelta(previous.Direction, current.Direction);
             if (courseDelta >= PreserveCourseDeltaDegrees)
+                return true;
+
+            var distanceMeters = GeoDistance.HaversineMeters(
+                previous.Latitude!.Value,
+                previous.Longitude!.Value,
+                current.Latitude!.Value,
+                current.Longitude!.Value);
+            if (distanceMeters >= Math.Max(80, settings.ReturnDistanceMeters * 0.75))
                 return true;
         }
 

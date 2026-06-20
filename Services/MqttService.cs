@@ -120,13 +120,6 @@ public sealed class MqttService : IAsyncDisposable
             var topic = e.ApplicationMessage.Topic ?? string.Empty;
             var payload = e.ApplicationMessage.PayloadSegment.AsMemory();
 
-            if (!topic.EndsWith("/cmd", StringComparison.OrdinalIgnoreCase))
-            {
-                MqttLogger.LogInfo($"← {topic} ({payload.Length} bytes)");
-                if (_settings.LogPayload && payload.Length > 0)
-                    MqttLogger.LogPayload(topic, payload);
-            }
-
             _deviceHandler.HandleMessage(topic, payload);
 
             await Task.CompletedTask;

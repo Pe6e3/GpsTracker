@@ -39,5 +39,12 @@ public sealed class TracksController : ControllerBase
         {
             return BadRequest(new { message = ex.Message });
         }
+        catch (Exception ex)
+        {
+            TrafficLogger.LogInfo(
+                $"[API ERROR] GET /api/tracks/{deviceId}?from={from}&to={to}&raw={raw} → 500 {ex.GetType().Name}: {ex.Message}");
+
+            return StatusCode(500, new { message = "Ошибка построения трека" });
+        }
     }
 }

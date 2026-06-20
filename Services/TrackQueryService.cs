@@ -197,14 +197,18 @@ public sealed class TrackQueryService
                    DisplayDistanceMeters(points[index], points[clusterEnd + 1]) <= settings.ReturnDistanceMeters)
                 clusterEnd++;
 
-            if (clusterEnd > index && index > 0)
+            if (clusterEnd > index && index > 0 && clusterEnd < points.Length - 1)
             {
                 var clusterDurationSec = DisplayTimeDeltaSeconds(points[index], points[clusterEnd]);
                 var offsetFromPrev = DisplayDistanceMeters(points[index - 1], points[index]);
+                var continuesFromPreviousRoute = DisplayDistanceMeters(
+                    points[clusterEnd + 1],
+                    points[index - 1]) <= settings.ReturnDistanceMeters;
+
                 if (clusterDurationSec >= 300 &&
                     offsetFromPrev > settings.JumpDistanceMeters &&
-                    clusterEnd < points.Length - 1 &&
-                    DisplayDistanceMeters(points[clusterEnd], points[clusterEnd + 1]) > settings.ReturnDistanceMeters)
+                    DisplayDistanceMeters(points[clusterEnd], points[clusterEnd + 1]) > settings.ReturnDistanceMeters &&
+                    continuesFromPreviousRoute)
                 {
                     for (var clusterIndex = index; clusterIndex <= clusterEnd; clusterIndex++)
                         keep[clusterIndex] = false;

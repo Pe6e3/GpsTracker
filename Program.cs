@@ -1,6 +1,9 @@
-﻿using System.Text;
+﻿using System.Globalization;
+using System.Text;
 
 using GpsTcpProxy;
+
+using GpsTcpProxy.Middleware;
 
 using GpsTcpProxy.Services;
 
@@ -184,6 +187,8 @@ app.UseAuthentication();
 
 app.UseAuthorization();
 
+app.UseMiddleware<ApiErrorLoggingMiddleware>();
+
 app.MapControllers();
 
 
@@ -259,6 +264,42 @@ if (args.Contains("--reprocess-today", StringComparer.OrdinalIgnoreCase))
     TrafficLogger.LogInfo($"Reprocessing tracks from {AppTime.UtcToLocal(fromUtc):dd.MM.yyyy HH:mm:ss}...");
 
     foreach (var device in DeviceRegistry.GetAll())
+        processor.ReprocessFromUtc(device.Id, fromUtc);
+
+    TrafficLogger.LogInfo("Reprocessing complete");
+    return;
+}
+
+var reprocessFromArg = args.FirstOrDefault(arg =>
+    arg.StartsWith("--reprocess-from=", StringComparison.OrdinalIgnoreCase));
+var reprocessDeviceArg = args.FirstOrDefault(arg =>
+    arg.StartsWith("--reprocess-device=", StringComparison.OrdinalIgnoreCase));
+
+if (reprocessFromArg != null)
+{
+    if (!settings.TrackProcessing.Enabled)
+    {
+        TrafficLogger.LogInfo("Track processing disabled, reprocess skipped");
+        return;
+    }
+
+    var dateText = reprocessFromArg["--reprocess-from=".Length..];
+    if (!DateTime.TryParse(dateText, CultureInfo.InvariantCulture, DateTimeStyles.AssumeLocal, out var fromLocal))
+    {
+        TrafficLogger.LogInfo($"Invalid --reprocess-from date: {dateText}");
+        return;
+    }
+
+    var processor = app.Services.GetRequiredService<TrackProcessor>();
+    var fromUtc = AppTime.LocalToUtc(fromLocal.Date);
+    var deviceId = reprocessDeviceArg?["--reprocess-device=".Length..];
+    var devices = string.IsNullOrWhiteSpace(deviceId)
+        ? DeviceRegistry.GetAll()
+        : DeviceRegistry.GetAll().Where(device => device.Id == deviceId);
+
+    TrafficLogger.LogInfo($"Reprocessing tracks from {fromLocal:dd.MM.yyyy}...");
+
+    foreach (var device in devices)
         processor.ReprocessFromUtc(device.Id, fromUtc);
 
     TrafficLogger.LogInfo("Reprocessing complete");

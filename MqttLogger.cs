@@ -1,33 +1,37 @@
-using System.Text;
-
 namespace GpsTcpProxy;
 
 public static class MqttLogger
 {
-    private static readonly object Lock = new();
-
     public static void LogInfo(string message) =>
         WriteLine($"[MQTT] {message}");
 
     public static void LogError(string message) =>
         WriteLine($"[MQTT ERROR] {message}");
 
-    public static void LogPayload(string topic, ReadOnlyMemory<byte> payload)
+    public static void LogLocation(
+        string deviceName,
+        double? latitude,
+        double? longitude,
+        double? accuracyMeters,
+        int? batteryPercent)
     {
-        var text = DecodePayload(payload);
-        WriteLine($"[MQTT] json {topic}: {text}");
-    }
+        var batteryText = batteryPercent.HasValue ? $"🔋{batteryPercent.Value}%" : "🔋—";
 
-    private static string DecodePayload(ReadOnlyMemory<byte> payload)
-    {
-        try
+        if (latitude.HasValue && longitude.HasValue)
         {
-            return Encoding.UTF8.GetString(payload.Span);
+            var accuracyText = accuracyMeters.HasValue
+                ? $"точность {accuracyMeters.Value:F0}m"
+                : "точность —";
+
+            WriteLine($"[MQTT📡] {deviceName}: {latitude.Value:F5},{longitude.Value:F5} {accuracyText}, {batteryText}");
+            return;
         }
-        catch
-        {
-            return Convert.ToHexString(payload.Span);
-        }
+
+        var noCoordsAccuracy = accuracyMeters.HasValue
+            ? $"точность {accuracyMeters.Value:F0}m"
+            : "точность —";
+
+        WriteLine($"[MQTT📡] {deviceName}: нет координат ({noCoordsAccuracy}), {batteryText}");
     }
 
     private static void WriteLine(string message) =>

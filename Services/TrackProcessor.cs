@@ -65,14 +65,14 @@ public sealed class TrackProcessor
         for (var batchIndex = 0; batchIndex < MaxBatchesPerDevicePerRun * 20; batchIndex++)
         {
             var lastProcessedBefore = _trackPointStore.GetLastProcessedRawId(normalizedId);
-            ProcessDevice(normalizedId, DateTime.UtcNow);
+            ProcessDevice(normalizedId, DateTime.UtcNow, reprocessFromUtcMin: fromUtc);
             var lastProcessedAfter = _trackPointStore.GetLastProcessedRawId(normalizedId);
-            if (lastProcessedAfter == lastProcessedBefore)
+            if (!lastProcessedAfter.HasValue || lastProcessedAfter == lastProcessedBefore)
                 break;
         }
     }
 
-    public void ProcessDevice(string deviceId, DateTime? cutoffUtc = null)
+    public void ProcessDevice(string deviceId, DateTime? cutoffUtc = null, DateTime? reprocessFromUtcMin = null)
     {
         if (!_settings.Enabled)
             return;
@@ -83,8 +83,8 @@ public sealed class TrackProcessor
 
         var processingCutoffUtc = cutoffUtc ?? DateTime.UtcNow.AddMinutes(-_settings.ProcessingDelayMinutes);
         var lastProcessedRawId = _trackPointStore.GetLastProcessedRawId(normalizedId);
-        DateTime? fromUtcMin = null;
-        if (!lastProcessedRawId.HasValue && _settings.InitialLookbackDays > 0)
+        DateTime? fromUtcMin = reprocessFromUtcMin;
+        if (!fromUtcMin.HasValue && !lastProcessedRawId.HasValue && _settings.InitialLookbackDays > 0)
         {
             var lookbackUtc = DateTime.UtcNow.AddDays(-_settings.InitialLookbackDays);
             var todayStartUtc = AppTime.LocalToUtc(AppTime.NowLocal().Date);
