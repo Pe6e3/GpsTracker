@@ -569,8 +569,20 @@ public static class TrackSegmentProcessor
 
         var center = ComputeStationaryCenter(points, startIndex, endIndex);
         var radiusMeters = ComputeStationaryRadius(points, startIndex, endIndex, center);
+        if (radiusMeters > settings.BriefStopRadiusMeters)
+            return false;
 
-        return radiusMeters <= settings.BriefStopRadiusMeters;
+        var pathMeters = 0d;
+        for (var pathIndex = startIndex + 1; pathIndex <= endIndex; pathIndex++)
+        {
+            pathMeters += GeoDistance.HaversineMeters(
+                points[pathIndex - 1].Latitude!.Value,
+                points[pathIndex - 1].Longitude!.Value,
+                points[pathIndex].Latitude!.Value,
+                points[pathIndex].Longitude!.Value);
+        }
+
+        return pathMeters <= settings.BriefStopRadiusMeters * 2;
     }
 
     private static int? MinNullableIndex(int? left, int? right)

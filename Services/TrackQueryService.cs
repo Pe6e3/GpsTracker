@@ -162,6 +162,12 @@ public sealed class TrackQueryService
             if (speedKmh <= 120)
                 continue;
 
+            if (TryGetSpikeRecoveryLeg(points, index, settings, out var spikeIndex))
+            {
+                RemoveSpikeLandingCluster(points, spikeIndex, keep, settings);
+                continue;
+            }
+
             for (var clusterIndex = index; clusterIndex < points.Length; clusterIndex++)
             {
                 if (!keep[clusterIndex])
@@ -177,6 +183,63 @@ public sealed class TrackQueryService
         return RemoveStickyFalseClusters(
             points.Where((_, index) => keep[index]).ToArray(),
             settings);
+    }
+
+    private static bool TryGetSpikeRecoveryLeg(
+        TrackPointDto[] points,
+        int index,
+        TrackProcessingSettings settings,
+        out int spikeIndex)
+    {
+        spikeIndex = -1;
+
+        if (index < 2)
+            return false;
+
+        var anchorIndex = index - 2;
+        while (anchorIndex >= 0)
+        {
+            var jumpToNext = DisplayDistanceMeters(points[anchorIndex], points[anchorIndex + 1]);
+            if (jumpToNext > settings.JumpDistanceMeters)
+                break;
+
+            anchorIndex--;
+        }
+
+        if (anchorIndex < 0)
+            return false;
+
+        spikeIndex = anchorIndex + 1;
+        var anchor = points[anchorIndex];
+        var spike = points[spikeIndex];
+        var current = points[index];
+        var distSpikeToAnchor = DisplayDistanceMeters(anchor, spike);
+        var distCurrentToAnchor = DisplayDistanceMeters(anchor, current);
+        var distCurrentToSpike = DisplayDistanceMeters(spike, current);
+
+        return distSpikeToAnchor > settings.JumpDistanceMeters
+            && distCurrentToSpike > settings.ReturnDistanceMeters
+            && distCurrentToAnchor < distSpikeToAnchor;
+    }
+
+    private static void RemoveSpikeLandingCluster(
+        TrackPointDto[] points,
+        int spikeIndex,
+        bool[] keep,
+        TrackProcessingSettings settings)
+    {
+        keep[spikeIndex] = false;
+
+        for (var clusterIndex = spikeIndex + 1; clusterIndex < points.Length; clusterIndex++)
+        {
+            if (!keep[clusterIndex])
+                continue;
+
+            if (DisplayDistanceMeters(points[spikeIndex], points[clusterIndex]) > settings.ReturnDistanceMeters)
+                break;
+
+            keep[clusterIndex] = false;
+        }
     }
 
     private static TrackPointDto[] RemoveStickyFalseClusters(
