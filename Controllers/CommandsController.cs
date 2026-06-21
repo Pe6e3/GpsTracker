@@ -1,3 +1,4 @@
+using System.Security.Claims;
 using GpsTcpProxy.Services;
 using Microsoft.AspNetCore.Authorization;
 using Microsoft.AspNetCore.Mvc;
@@ -20,6 +21,10 @@ public sealed class CommandsController : ControllerBase
     public async Task<IActionResult> SendCommand(string deviceId, [FromBody] DeviceCommandRequest? request, CancellationToken cancellationToken)
     {
         if (!DeviceRegistry.Exists(deviceId))
+            return NotFound(new { error = "Device not found" });
+
+        var username = User.FindFirstValue(ClaimTypes.Name);
+        if (!UserRegistry.CanAccessDevice(username, deviceId))
             return NotFound(new { error = "Device not found" });
 
         if (DeviceRegistry.GetProtocol(deviceId) != Models.DeviceProtocol.OwnTracks)

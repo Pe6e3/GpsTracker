@@ -1,4 +1,11 @@
 {
-  "admin": "CHANGE_ME",
-  "fedor": "CHANGE_ME"
+  "admin": {
+    "password": "CHANGE_ME",
+    "telegramChatId": "8888888888"
+  },
+  "fedor": {
+    "password": "CHANGE_ME",
+    "devices": ["phone-fedor", "123123123"],
+    "telegramChatId": "9999999999"
+  }
 }

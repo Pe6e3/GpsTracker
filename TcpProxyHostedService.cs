@@ -108,7 +108,7 @@ public sealed class TcpProxyHostedService : IHostedService
                         }
                         else
                         {
-                            var session = new MultiProtocolDeviceSession(_connections, connection, client, _telemetryStore);
+                            var session = new RoutingDeviceSession(_connections, connection, client, _telemetryStore);
                             await session.RunAsync(stoppingToken);
                         }
                     }

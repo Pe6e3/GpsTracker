@@ -210,10 +210,7 @@ else
 
 
 if (settings.Telegram.Enabled &&
-
-    !string.IsNullOrWhiteSpace(settings.Telegram.BotToken) &&
-
-    !string.IsNullOrWhiteSpace(settings.Telegram.ChatId))
+    !string.IsNullOrWhiteSpace(settings.Telegram.BotToken))
 
 {
 

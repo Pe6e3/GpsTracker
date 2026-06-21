@@ -18,7 +18,7 @@ public sealed class ServiceStatusService
         _trackProcessingSettings = trackProcessingSettings;
     }
 
-    public DevicesResponse GetDevicesStatus()
+    public DevicesResponse GetDevicesStatus(string? username = null)
     {
         var trafficSize = LogFiles.Traffic.GetDirectorySizeBytes();
         var rawSize = LogFiles.Raw.GetDirectorySizeBytes();
@@ -27,9 +27,11 @@ public sealed class ServiceStatusService
         var todayToUtc = AppTime.LocalToUtc(nowLocal);
         var monthFromUtc = AppTime.LocalToUtc(new DateTime(nowLocal.Year, nowLocal.Month, 1));
 
+        var devices = UserRegistry.FilterDevices(username, DeviceRegistry.GetAll());
+
         return new DevicesResponse
         {
-            Devices = DeviceRegistry.GetAll()
+            Devices = devices
                 .Select(device => MapDevice(
                     device,
                     _telemetryStore.GetDeviceStats(device.Id),

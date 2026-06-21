@@ -39,6 +39,20 @@ public static class TrafficLogger
         WriteLine($"[{Timestamp()}] [{deviceName}] {line}");
     }
 
+    public static void LogHqDevicePacket(ProxyConnection connection, HqMessage message)
+    {
+        connection.Touch();
+
+        var line = HqEventFormatter.FormatLogLine(message);
+        if (line == null)
+            return;
+
+        var deviceName = DeviceRegistry.GetDisplayName(
+            string.IsNullOrWhiteSpace(message.DeviceId) ? connection.DeviceLabel : message.DeviceId);
+
+        WriteLine($"[{Timestamp()}] [{deviceName}] {line}");
+    }
+
     public static void LogUnparsedDeviceData(ProxyConnection connection, int bytes, DeviceProtocol? protocol = null)
     {
         connection.Touch();
@@ -47,6 +61,8 @@ public static class TrafficLogger
         {
             DeviceProtocol.Gt06 => "GT06",
             DeviceProtocol.Jt808 => "JT/T808",
+            DeviceProtocol.Gt23 => "GT23",
+            DeviceProtocol.Hq => "HQ",
             _ => "неизвестный"
         };
         WriteLine($"[{Timestamp()}] [{deviceName}] Тип пакета: не-{protocolLabel} bytes={bytes}");

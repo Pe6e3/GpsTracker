@@ -9,6 +9,10 @@ namespace GpsTcpProxy;
 public sealed class TelemetryStore : IDisposable
 {
     public const double OwnTracksNoCoordinatesAccuracyM = 50;
+    public const double MaxPlausibleSpeedKmh = 1000;
+
+    public static bool IsImplausibleSpeed(double speedKmh) =>
+        speedKmh > MaxPlausibleSpeedKmh || double.IsNaN(speedKmh) || double.IsInfinity(speedKmh);
 
     private readonly string _connectionString;
     private readonly string _databaseFullPath;
@@ -307,6 +311,9 @@ public sealed class TelemetryStore : IDisposable
         if (location == null)
             return;
 
+        if (IsImplausibleSpeed(location.SpeedKmh))
+            return;
+
         if (!TryGetGpsTimeUtc(message.Body, out var gpsTimeUtc))
             return;
 
@@ -384,6 +391,9 @@ public sealed class TelemetryStore : IDisposable
         if (location == null)
             return;
 
+        if (IsImplausibleSpeed(location.SpeedKmh))
+            return;
+
         var deviceId = DeviceRegistry.NormalizeId(deviceLabel ?? string.Empty);
         if (string.IsNullOrEmpty(deviceId) || deviceId == "?")
             return;
@@ -436,11 +446,86 @@ public sealed class TelemetryStore : IDisposable
             command.Parameters.AddWithValue("$latitude", location.Latitude);
             command.Parameters.AddWithValue("$longitude", location.Longitude);
             command.Parameters.AddWithValue("$altitude", 0);
-            command.Parameters.AddWithValue("$speed_kmh", 0);
+            command.Parameters.AddWithValue("$speed_kmh", location.SpeedKmh);
             command.Parameters.AddWithValue("$direction", location.Direction);
             command.Parameters.AddWithValue("$gps_time_utc", FormatUtc(gpsTimeUtc));
             command.Parameters.AddWithValue("$received_at_utc", FormatUtc(receivedAtUtc));
             command.Parameters.AddWithValue("$message_serial", message.Serial);
+            command.Parameters.AddWithValue("$alarm_flags", 0);
+            command.Parameters.AddWithValue("$status_flags", 0);
+            command.Parameters.AddWithValue("$geofence_names", geofenceNamesJson);
+            command.ExecuteNonQuery();
+        }
+
+        AnalyzeTheft(deviceId, location.Latitude, location.Longitude, gpsTimeUtc, geofenceNamesJson);
+    }
+
+    public void SaveHqLocation(HqMessage message)
+    {
+        var location = message.Location;
+        if (location == null || !location.GpsValid)
+            return;
+
+        if (IsImplausibleSpeed(location.SpeedKmh))
+            return;
+
+        var deviceId = DeviceRegistry.NormalizeId(message.DeviceId);
+        if (string.IsNullOrEmpty(deviceId))
+            return;
+
+        var deviceName = DeviceRegistry.GetDisplayName(deviceId);
+        if (deviceName == deviceId || deviceName == "?")
+            deviceName = null;
+
+        var receivedAtUtc = DateTime.UtcNow;
+        var gpsTimeUtc = AppTime.AsUtc(location.DeviceTimeUtc);
+        var geofenceNamesJson = ResolveGeofenceNamesJson(deviceId, location.Latitude, location.Longitude);
+
+        lock (_lock)
+        {
+            using var connection = OpenConnection();
+            using var command = connection.CreateCommand();
+            command.CommandText = """
+                INSERT INTO telemetry_points (
+                    device_id,
+                    device_name,
+                    latitude,
+                    longitude,
+                    altitude,
+                    speed_kmh,
+                    direction,
+                    gps_time_utc,
+                    received_at_utc,
+                    message_serial,
+                    alarm_flags,
+                    status_flags,
+                    geofence_names
+                ) VALUES (
+                    $device_id,
+                    $device_name,
+                    $latitude,
+                    $longitude,
+                    $altitude,
+                    $speed_kmh,
+                    $direction,
+                    $gps_time_utc,
+                    $received_at_utc,
+                    $message_serial,
+                    $alarm_flags,
+                    $status_flags,
+                    $geofence_names
+                );
+                """;
+            command.Parameters.AddWithValue("$device_id", deviceId);
+            command.Parameters.AddWithValue("$device_name", (object?)deviceName ?? DBNull.Value);
+            command.Parameters.AddWithValue("$latitude", location.Latitude);
+            command.Parameters.AddWithValue("$longitude", location.Longitude);
+            command.Parameters.AddWithValue("$altitude", 0);
+            command.Parameters.AddWithValue("$speed_kmh", location.SpeedKmh);
+            command.Parameters.AddWithValue("$direction", location.Direction);
+            command.Parameters.AddWithValue("$gps_time_utc", FormatUtc(gpsTimeUtc));
+            command.Parameters.AddWithValue("$received_at_utc", FormatUtc(receivedAtUtc));
+            command.Parameters.AddWithValue("$message_serial", 0);
             command.Parameters.AddWithValue("$alarm_flags", 0);
             command.Parameters.AddWithValue("$status_flags", 0);
             command.Parameters.AddWithValue("$geofence_names", geofenceNamesJson);

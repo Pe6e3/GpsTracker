@@ -39,8 +39,7 @@ public sealed partial class TelegramBotService
 
     public bool IsConfigured =>
         _settings.Enabled &&
-        !string.IsNullOrWhiteSpace(_settings.BotToken) &&
-        !string.IsNullOrWhiteSpace(_settings.ChatId);
+        !string.IsNullOrWhiteSpace(_settings.BotToken);
 
     public async Task PollOnceAsync(CancellationToken cancellationToken)
     {
@@ -81,6 +80,9 @@ public sealed partial class TelegramBotService
         if (!IsAllowedChat(message.Chat?.Id))
             return;
 
+        var chatId = message.Chat!.Id.ToString(CultureInfo.InvariantCulture);
+        UserRegistry.TryGetUsernameByTelegramChatId(chatId, out var username);
+
         var command = message.Text.Trim();
         if (command.StartsWith('/'))
             command = command[1..];
@@ -92,13 +94,13 @@ public sealed partial class TelegramBotService
             if (string.IsNullOrEmpty(hoursText))
             {
                 _notificationGate.StopPermanent();
-                await _telegramService.SendRawAsync("🔕 Уведомления отключены (stop). Отправьте start для включения.", cancellationToken);
+                await _telegramService.SendRawAsync("🔕 Уведомления отключены (stop). Отправьте start для включения.", chatId: chatId, cancellationToken: cancellationToken);
                 return;
             }
 
             if (!int.TryParse(hoursText, NumberStyles.Integer, CultureInfo.InvariantCulture, out var hours) || hours <= 0)
             {
-                await _telegramService.SendRawAsync("Формат: stop или stop14 (часы).", cancellationToken);
+                await _telegramService.SendRawAsync("Формат: stop или stop14 (часы).", chatId: chatId, cancellationToken: cancellationToken);
                 return;
             }
 
@@ -106,38 +108,42 @@ public sealed partial class TelegramBotService
             var untilLocal = AppTime.UtcToLocal(DateTime.UtcNow.AddHours(hours));
             await _telegramService.SendRawAsync(
                 $"🔕 Уведомления отключены на {hours} ч (до {untilLocal:dd.MM.yyyy HH:mm}).",
-                cancellationToken);
+                chatId: chatId,
+                cancellationToken: cancellationToken);
             return;
         }
 
         if (string.Equals(command, "start", StringComparison.OrdinalIgnoreCase))
         {
             _notificationGate.Start();
-            await _telegramService.SendRawAsync("🔔 Уведомления включены.", cancellationToken);
-            await SendDeviceMapLinksAsync(cancellationToken);
+            await _telegramService.SendRawAsync("🔔 Уведомления включены.", chatId: chatId, cancellationToken: cancellationToken);
+            await SendDeviceMapLinksAsync(chatId, username, cancellationToken);
             return;
         }
 
         if (string.Equals(command, "wakeup", StringComparison.OrdinalIgnoreCase))
         {
-            await SendWakeupCommandAsync(cancellationToken);
+            await SendWakeupCommandAsync(chatId, username, cancellationToken);
             return;
         }
     }
 
-    private async Task SendWakeupCommandAsync(CancellationToken cancellationToken)
+    private async Task SendWakeupCommandAsync(string chatId, string username, CancellationToken cancellationToken)
     {
-        var phoneIds = _proxySettings.TheftDetection.GetPhoneDeviceIds();
+        var phoneIds = string.IsNullOrWhiteSpace(username)
+            ? _proxySettings.TheftDetection.GetPhoneDeviceIds()
+            : UserRegistry.GetPhoneDeviceIdsForOwner(username);
+
         if (phoneIds.Count == 0)
         {
-            await _telegramService.SendRawAsync("PhoneDeviceIds не заданы в конфиге.", cancellationToken);
+            await _telegramService.SendRawAsync("Нет телефонов OwnTracks для этого пользователя.", chatId: chatId, cancellationToken: cancellationToken);
             return;
         }
 
         var mqttService = _serviceProvider.GetRequiredService<MqttService>();
         var lines = await Task.WhenAll(phoneIds.Select(phoneId => BuildWakeupLineAsync(mqttService, phoneId)));
 
-        await _telegramService.SendRawAsync(string.Join('\n', lines), "HTML", CancellationToken.None);
+        await _telegramService.SendRawAsync(string.Join('\n', lines), parseMode: "HTML", chatId: chatId, cancellationToken: CancellationToken.None);
     }
 
     private async Task<string> BuildWakeupLineAsync(MqttService mqttService, string phoneId)
@@ -175,12 +181,15 @@ public sealed partial class TelegramBotService
         return $"📲 wakeup → {HtmlEncode(deviceLabel)} <a href=\"{HtmlEncode(googleUrl)}\">🗺️</a>";
     }
 
-    private async Task SendDeviceMapLinksAsync(CancellationToken cancellationToken)
+    private async Task SendDeviceMapLinksAsync(string chatId, string username, CancellationToken cancellationToken)
     {
         var telemetryStore = _serviceProvider.GetRequiredService<TelemetryStore>();
         var lines = new List<string> { "📍 Текущие позиции:" };
+        var devices = string.IsNullOrWhiteSpace(username)
+            ? DeviceRegistry.GetAll()
+            : UserRegistry.FilterDevices(username, DeviceRegistry.GetAll());
 
-        foreach (var device in DeviceRegistry.GetAll())
+        foreach (var device in devices)
         {
             var maxAccuracy = _proxySettings.TheftDetection.IsPhoneDevice(device.Id)
                 ? _proxySettings.Mqtt.MaxTrackAccuracyMeters
@@ -207,7 +216,7 @@ public sealed partial class TelegramBotService
                 $"<a href=\"{HtmlEncode(googleUrl)}\">🗺️</a>{batterySuffix}");
         }
 
-        await _telegramService.SendRawAsync(string.Join('\n', lines), "HTML", cancellationToken);
+        await _telegramService.SendRawAsync(string.Join('\n', lines), parseMode: "HTML", chatId: chatId, cancellationToken: cancellationToken);
     }
 
     private static string HtmlEncode(string value) =>
@@ -222,10 +231,7 @@ public sealed partial class TelegramBotService
         if (!chatId.HasValue)
             return false;
 
-        if (!long.TryParse(_settings.ChatId.Trim(), NumberStyles.Integer, CultureInfo.InvariantCulture, out var allowedChatId))
-            return false;
-
-        return chatId.Value == allowedChatId;
+        return UserRegistry.IsAllowedTelegramChat(chatId.Value.ToString(CultureInfo.InvariantCulture));
     }
 
     [GeneratedRegex("^stop(\\d+)?$", RegexOptions.IgnoreCase | RegexOptions.CultureInvariant)]

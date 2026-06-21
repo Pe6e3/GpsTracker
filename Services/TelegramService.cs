@@ -23,19 +23,27 @@ public sealed class TelegramService
 
     public bool IsConfigured =>
         _settings.Enabled &&
-        !string.IsNullOrWhiteSpace(_settings.BotToken) &&
-        !string.IsNullOrWhiteSpace(_settings.ChatId);
+        !string.IsNullOrWhiteSpace(_settings.BotToken);
 
-    public void NotifyGeofenceTransition(string deviceId, string? deviceName, string geofenceName, bool entered)
+    public void NotifyGeofenceTransition(
+        string deviceId,
+        string? deviceName,
+        string geofenceName,
+        bool entered,
+        string? chatId = null)
     {
         if (!IsConfigured || !_notificationGate.CanNotify)
+            return;
+
+        var targetChatId = ResolveChatId(chatId);
+        if (targetChatId == null)
             return;
 
         var label = FormatDeviceLabel(deviceId, deviceName);
         var action = entered ? "вошёл в" : "вышел из";
         var icon = entered ? "⬡✅" : "⬡🚪";
         var text = $"{icon} {label}\n{action} «{geofenceName}»";
-        _ = SendRawAsync(text);
+        _ = SendRawAsync(text, chatId: targetChatId);
     }
 
     public void NotifyTheftAlert(
@@ -50,9 +58,14 @@ public sealed class TelegramService
         double distanceKm,
         double deviceSpeedKmh,
         double phoneSpeedKmh,
-        string gpsTimeLocal)
+        string gpsTimeLocal,
+        string? chatId = null)
     {
         if (!IsConfigured || !_notificationGate.CanNotify)
+            return;
+
+        var targetChatId = ResolveChatId(chatId);
+        if (targetChatId == null)
             return;
 
         var deviceLabel = FormatDeviceLabel(deviceId, deviceName);
@@ -69,18 +82,34 @@ public sealed class TelegramService
             $"(телефон {phoneSpeedKmh:F0} км/ч)\n" +
             $"Карта: {mapUrl}";
 
-        _ = SendRawAsync(text);
+        _ = SendRawAsync(text, chatId: targetChatId);
     }
 
-    public Task SendRawAsync(string text, CancellationToken cancellationToken = default) =>
-        SendRawAsync(text, parseMode: null, cancellationToken);
-
-    public Task SendRawAsync(string text, string? parseMode, CancellationToken cancellationToken = default)
+    public Task SendRawAsync(
+        string text,
+        string? parseMode = null,
+        string? chatId = null,
+        CancellationToken cancellationToken = default)
     {
         if (!IsConfigured)
             return Task.CompletedTask;
 
-        return SendMessageAsync(text, parseMode, cancellationToken);
+        var targetChatId = ResolveChatId(chatId);
+        if (targetChatId == null)
+            return Task.CompletedTask;
+
+        return SendMessageAsync(text, parseMode, targetChatId, cancellationToken);
+    }
+
+    private string? ResolveChatId(string? chatId)
+    {
+        if (!string.IsNullOrWhiteSpace(chatId))
+            return chatId.Trim();
+
+        if (!string.IsNullOrWhiteSpace(_settings.ChatId))
+            return _settings.ChatId.Trim();
+
+        return null;
     }
 
     private static string FormatDeviceLabel(string deviceId, string? deviceName)
@@ -91,14 +120,18 @@ public sealed class TelegramService
         return $"{deviceName} ({deviceId})";
     }
 
-    private async Task SendMessageAsync(string text, string? parseMode, CancellationToken cancellationToken)
+    private async Task SendMessageAsync(
+        string text,
+        string? parseMode,
+        string chatId,
+        CancellationToken cancellationToken)
     {
         try
         {
             var url = $"https://api.telegram.org/bot{_settings.BotToken.Trim()}/sendMessage";
             var payload = new TelegramSendMessageRequest
             {
-                ChatId = _settings.ChatId.Trim(),
+                ChatId = chatId,
                 Text = text,
                 ParseMode = parseMode,
                 DisableWebPagePreview = true

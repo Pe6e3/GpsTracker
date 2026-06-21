@@ -69,10 +69,24 @@ public static class DeviceRegistry
         if (!string.IsNullOrWhiteSpace(protocolText))
             DeviceProtocolParser.TryParse(protocolText, out protocol);
 
+        var proxyHost = value.TryGetProperty("proxyHost", out var proxyHostElement)
+            ? proxyHostElement.GetString()
+            : value.TryGetProperty("ProxyHost", out proxyHostElement)
+                ? proxyHostElement.GetString()
+                : null;
+
+        int? proxyPort = null;
+        if (value.TryGetProperty("proxyPort", out var proxyPortElement) && proxyPortElement.TryGetInt32(out var port))
+            proxyPort = port;
+        else if (value.TryGetProperty("ProxyPort", out proxyPortElement) && proxyPortElement.TryGetInt32(out port))
+            proxyPort = port;
+
         return new DeviceEntry
         {
             Name = entryName.Trim(),
-            Protocol = protocol
+            Protocol = protocol,
+            ProxyHost = string.IsNullOrWhiteSpace(proxyHost) ? null : proxyHost.Trim(),
+            ProxyPort = proxyPort
         };
     }
 
@@ -132,6 +146,34 @@ public static class DeviceRegistry
     {
         var shortId = NormalizeId(terminalId ?? string.Empty);
         return !string.IsNullOrEmpty(shortId) && Devices.ContainsKey(shortId);
+    }
+
+    public static bool ShouldProxyToRemote(string? terminalId)
+    {
+        var shortId = NormalizeId(terminalId ?? string.Empty);
+        if (string.IsNullOrEmpty(shortId))
+            return false;
+
+        if (Devices.TryGetValue(shortId, out var entry))
+            return entry.Protocol == DeviceProtocol.Gt23;
+
+        return false;
+    }
+
+    public static (string Host, int Port) GetProxyEndpoint(string? terminalId)
+    {
+        const string defaultHost = "27.aika168.com";
+        const int defaultPort = 8185;
+
+        var shortId = NormalizeId(terminalId ?? string.Empty);
+        if (!string.IsNullOrEmpty(shortId) && Devices.TryGetValue(shortId, out var entry))
+        {
+            return (
+                string.IsNullOrWhiteSpace(entry.ProxyHost) ? defaultHost : entry.ProxyHost,
+                entry.ProxyPort is > 0 and <= 65535 ? entry.ProxyPort.Value : defaultPort);
+        }
+
+        return (defaultHost, defaultPort);
     }
 
     public static IReadOnlyList<DeviceDto> GetAll() =>

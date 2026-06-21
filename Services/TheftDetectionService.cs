@@ -41,6 +41,17 @@ public sealed class TheftDetectionService
         if (DeviceRegistry.GetProtocol(normalizedId) == DeviceProtocol.OwnTracks)
             return;
 
+        if (!UserRegistry.TryGetDeviceOwner(normalizedId, out var ownerUsername))
+            return;
+
+        var ownerChatId = UserRegistry.GetTelegramChatId(ownerUsername);
+        if (ownerChatId == null)
+            return;
+
+        var ownerPhoneIds = UserRegistry.GetPhoneDeviceIdsForOwner(ownerUsername);
+        if (ownerPhoneIds.Count == 0)
+            return;
+
         var geofences = GeofenceStore.DeserializeNames(geofenceNamesJson);
         if (geofences.Count > 0)
         {
@@ -54,7 +65,7 @@ public sealed class TheftDetectionService
             gpsTimeUtc,
             cfg.RecentMovementWindowMinutes);
 
-        if (IsCoordinatedDeparture(store, normalizedId, gpsTimeUtc, recentMovementMeters, cfg))
+        if (IsCoordinatedDeparture(store, normalizedId, gpsTimeUtc, recentMovementMeters, ownerPhoneIds, cfg))
         {
             _suspiciousCounts.TryRemove(normalizedId, out _);
             return;
@@ -65,6 +76,7 @@ public sealed class TheftDetectionService
             latitude,
             longitude,
             gpsTimeUtc,
+            ownerPhoneIds,
             cfg,
             _settings.Mqtt.MaxTrackAccuracyMeters);
         if (phoneReference == null)
@@ -129,7 +141,8 @@ public sealed class TheftDetectionService
             distanceKm,
             speedKmh,
             phonePoint.SpeedKmh,
-            gpsTimeLocal);
+            gpsTimeLocal,
+            ownerChatId);
     }
 
     private static bool IsCoordinatedDeparture(
@@ -137,6 +150,7 @@ public sealed class TheftDetectionService
         string trackerId,
         DateTime gpsTimeUtc,
         double recentMovementMeters,
+        IReadOnlyList<string> phoneDeviceIds,
         TheftDetectionSettings cfg)
     {
         if (recentMovementMeters < cfg.RecentMovementDistanceMeters)
@@ -150,7 +164,7 @@ public sealed class TheftDetectionService
         if (minutesSinceExit > cfg.DepartureGraceMinutes)
             return false;
 
-        foreach (var phoneId in cfg.GetPhoneDeviceIds())
+        foreach (var phoneId in phoneDeviceIds)
         {
             var phonePoint = store.GetLatestPositionAtOrBefore(phoneId, gpsTimeUtc);
             if (phonePoint?.Latitude == null || phonePoint.Longitude == null)
@@ -191,12 +205,13 @@ public sealed class TheftDetectionService
         double latitude,
         double longitude,
         DateTime gpsTimeUtc,
+        IReadOnlyList<string> phoneDeviceIds,
         TheftDetectionSettings cfg,
         double maxTrackAccuracyMeters)
     {
         PhoneReference? nearest = null;
 
-        foreach (var phoneId in cfg.GetPhoneDeviceIds())
+        foreach (var phoneId in phoneDeviceIds)
         {
             var phonePoint = store.GetLatestPositionAtOrBefore(
                 phoneId,

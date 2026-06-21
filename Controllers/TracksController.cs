@@ -1,3 +1,4 @@
+using System.Security.Claims;
 using GpsTcpProxy.Models;
 using GpsTcpProxy.Services;
 using Microsoft.AspNetCore.Authorization;
@@ -25,6 +26,10 @@ public sealed class TracksController : ControllerBase
         [FromQuery] bool raw = false)
     {
         if (!DeviceRegistry.Exists(deviceId))
+            return NotFound(new { message = "Устройство не найдено" });
+
+        var username = User.FindFirstValue(ClaimTypes.Name);
+        if (!UserRegistry.CanAccessDevice(username, deviceId))
             return NotFound(new { message = "Устройство не найдено" });
 
         try

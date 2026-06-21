@@ -1,3 +1,4 @@
+using System.Security.Claims;
 using GpsTcpProxy.Models;
 using GpsTcpProxy.Services;
 using Microsoft.AspNetCore.Authorization;
@@ -18,6 +19,9 @@ public sealed class DevicesController : ControllerBase
     }
 
     [HttpGet]
-    public ActionResult<DevicesResponse> GetAll() =>
-        Ok(_serviceStatusService.GetDevicesStatus());
+    public ActionResult<DevicesResponse> GetAll()
+    {
+        var username = User.FindFirstValue(ClaimTypes.Name);
+        return Ok(_serviceStatusService.GetDevicesStatus(username));
+    }
 }

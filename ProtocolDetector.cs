@@ -12,8 +12,15 @@ public sealed class ProtocolDetectionResult
 
 public static class ProtocolDetector
 {
-    public static ProtocolDetectionResult? TryDetect(IReadOnlyList<byte[]> jt808Frames, IReadOnlyList<byte[]> gt06Frames)
+    public static ProtocolDetectionResult? TryDetect(
+        IReadOnlyList<byte[]> jt808Frames,
+        IReadOnlyList<byte[]> gt06Frames,
+        IReadOnlyList<byte[]>? hqFrames = null)
     {
+        var hqDetection = hqFrames is { Count: > 0 } ? TryDetectHq(hqFrames) : null;
+        if (hqDetection != null)
+            return hqDetection;
+
         string? jt808DeviceId = null;
         string? gt06DeviceId = null;
 
@@ -87,8 +94,13 @@ public static class ProtocolDetector
 
     public static ProtocolDetectionResult? TryDetectProtocolOnly(
         IReadOnlyList<byte[]> jt808Frames,
-        IReadOnlyList<byte[]> gt06Frames)
+        IReadOnlyList<byte[]> gt06Frames,
+        IReadOnlyList<byte[]>? hqFrames = null)
     {
+        var hqDetection = hqFrames is { Count: > 0 } ? TryDetectHq(hqFrames) : null;
+        if (hqDetection != null)
+            return hqDetection;
+
         var full = TryDetect(jt808Frames, gt06Frames);
         if (full != null)
             return full;
@@ -98,6 +110,12 @@ public static class ProtocolDetector
 
     public static DeviceProtocol GuessProtocol(ReadOnlySpan<byte> data)
     {
+        if (data.Length >= 3 && data[0] == (byte)'*' && data[1] == (byte)'H' && data[2] == (byte)'Q')
+            return DeviceProtocol.Hq;
+
+        if (data.Length > 0 && data[0] == HqParser.BinaryFrameMarker)
+            return DeviceProtocol.Hq;
+
         for (var i = 0; i + 1 < data.Length; i++)
         {
             if (data[i] == 0x78 && data[i + 1] == 0x78)
@@ -148,6 +166,30 @@ public static class ProtocolDetector
                 Protocol = validGt06 >= validJt808 ? DeviceProtocol.Gt06 : DeviceProtocol.Jt808,
                 DeviceId = deviceId,
                 FromRegistry = false
+            };
+        }
+
+        return null;
+    }
+
+    public static ProtocolDetectionResult? TryDetectHq(IReadOnlyList<byte[]> hqFrames)
+    {
+        foreach (var frame in hqFrames)
+        {
+            if (!HqParser.TryParseFrame(frame, out var message) || message == null)
+                continue;
+
+            if (string.IsNullOrWhiteSpace(message.DeviceId))
+                continue;
+
+            var registryProtocol = DeviceRegistry.GetProtocolOrNull(message.DeviceId);
+            return new ProtocolDetectionResult
+            {
+                Protocol = registryProtocol == DeviceProtocol.Hq || registryProtocol == null
+                    ? DeviceProtocol.Hq
+                    : registryProtocol.Value,
+                DeviceId = message.DeviceId,
+                FromRegistry = registryProtocol == DeviceProtocol.Hq
             };
         }
 

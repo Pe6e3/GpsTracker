@@ -36,9 +36,21 @@ public sealed class MultiProtocolDeviceSession
 
     public async Task RunAsync(CancellationToken cancellationToken)
     {
+        await RunWithPrefetchedAsync(_client.GetStream(), ReadOnlyMemory<byte>.Empty, cancellationToken);
+    }
+
+    public async Task RunWithPrefetchedAsync(
+        NetworkStream stream,
+        ReadOnlyMemory<byte> prefetched,
+        CancellationToken cancellationToken)
+    {
+        var ownsLifecycle = true;
+
         try
         {
-            using var stream = _client.GetStream();
+            if (!prefetched.IsEmpty)
+                await ProcessChunkAsync(stream, prefetched, cancellationToken);
+
             var buffer = new byte[BufferSize];
 
             while (!cancellationToken.IsCancellationRequested)
@@ -66,8 +78,11 @@ public sealed class MultiProtocolDeviceSession
         }
         finally
         {
-            CloseQuietly(_client);
-            _connections.Unregister(_connection);
+            if (ownsLifecycle)
+            {
+                CloseQuietly(_client);
+                _connections.Unregister(_connection);
+            }
         }
     }
 
@@ -117,6 +132,9 @@ public sealed class MultiProtocolDeviceSession
         }
 
         if (detection.Protocol == DeviceProtocol.Gt06 && _pendingGt06Frames.Count == 0)
+            return;
+
+        if (detection.Protocol == DeviceProtocol.Gt23 || DeviceRegistry.ShouldProxyToRemote(detection.DeviceId))
             return;
 
         ActivateProtocol(detection);

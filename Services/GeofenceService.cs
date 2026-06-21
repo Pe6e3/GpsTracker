@@ -76,16 +76,18 @@ public sealed class GeofenceService
         var deviceName = DeviceRegistry.GetDisplayName(deviceId);
         var label = deviceName == deviceId || deviceName == "?" ? deviceId : $"{deviceName} ({deviceId})";
 
+        var chatId = UserRegistry.GetTelegramChatIdForDevice(deviceId);
+
         foreach (var name in previous.Except(current, StringComparer.OrdinalIgnoreCase).OrderBy(x => x, StringComparer.OrdinalIgnoreCase))
         {
             TrafficLogger.LogInfo($"[GEOFENCE] {label}: вышел из «{name}»");
-            _telegramService.NotifyGeofenceTransition(deviceId, deviceName, name, entered: false);
+            _telegramService.NotifyGeofenceTransition(deviceId, deviceName, name, entered: false, chatId);
         }
 
         foreach (var name in current.Except(previous, StringComparer.OrdinalIgnoreCase).OrderBy(x => x, StringComparer.OrdinalIgnoreCase))
         {
             TrafficLogger.LogInfo($"[GEOFENCE] {label}: вошёл в «{name}»");
-            _telegramService.NotifyGeofenceTransition(deviceId, deviceName, name, entered: true);
+            _telegramService.NotifyGeofenceTransition(deviceId, deviceName, name, entered: true, chatId);
         }
     }
 
